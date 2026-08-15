@@ -69,14 +69,22 @@ jobs:
           fi
 
           features="$(printf '%s' "$targets" | tr ',' '\n' | sed 's/^/target-/' | paste -sd, -)"
-          projects="$(printf '%s' "runtime,$targets" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)"
+
+          prefix="$(sed -n 's/^python_prefix = "\(.*\)"/\1/p' clients.toml | head -1)"
+          runtime_dist="$(sed -n 's/^name = "\(.*\)"/\1/p' packages/python/pyproject.toml | head -1)"
+
+          projects="{\"id\":\"runtime\",\"dist\":\"$runtime_dist\",\"environment\":\"pypi\"}"
+          for target in $(printf '%s' "$targets" | tr ',' ' '); do
+            projects="$projects,{\"id\":\"$target\",\"dist\":\"${prefix}client-${target}\",\"environment\":\"pypi-client-${target}\"}"
+          done
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "features=$features" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "projects=[$projects]" >> "$GITHUB_OUTPUT"
 
-          echo "version $version, features $features, publish $publish, projects [$projects]"
+          echo "version $version, features $features, publish $publish"
+          echo "pypi projects [$projects]"
 
   build:
     needs: plan
@@ -324,9 +332,9 @@ jobs:
     strategy:
       max-parallel: 1
       matrix:
-        project: ${{ fromJson(needs.plan.outputs.projects) }}
+        include: ${{ fromJson(needs.plan.outputs.projects) }}
     runs-on: ubuntu-22.04
-    environment: pypi
+    environment: ${{ matrix.environment }}
     permissions:
       contents: read
       id-token: write
@@ -348,7 +356,8 @@ jobs:
 
       - name: Build the distributions
         env:
-          PROJECT: ${{ matrix.project }}
+          PROJECT: ${{ matrix.id }}
+          DIST: ${{ matrix.dist }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/wheels"
@@ -360,6 +369,7 @@ jobs:
             cp "release/python/$PROJECT/dist/"*.whl "$GITHUB_WORKSPACE/wheels/"
           fi
 
+          echo "built $DIST"
           ls -l "$GITHUB_WORKSPACE/wheels"
 
       - uses: pypa/gh-action-pypi-publish@release/v1
