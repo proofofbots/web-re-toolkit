@@ -1,0 +1,13 @@
+{
+  "target": "example",
+  "config": { "clock_ms": 1700000000000, "seed": 7 },
+  "diag": { "mode": "on_error" },
+  "cases": [
+    {
+      "name": "submitting to a closed port fails and leaves a report",
+      "op": "submit",
+      "params": { "url": "http://127.0.0.1:9/collect", "body": "AAAA" },
+      "expect_error": "resource"
+    }
+  ]
+}
