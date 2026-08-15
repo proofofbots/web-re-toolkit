@@ -1,0 +1,19 @@
+[package]
+name = "wre-variants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One-fact-at-a-time sweeps, noise floor subtraction and signal attribution"
+
+[dependencies]
+wre-core.workspace = true
+wre-wire.workspace = true
+
+anyhow.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
