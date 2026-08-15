@@ -1,0 +1,22 @@
+[package]
+name = "wre-pow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proof of work: key derivation, hash chains, acceptance predicates and parallel nonce search"
+
+[dependencies]
+wre-core.workspace = true
+
+argon2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+rayon.workspace = true
+scrypt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
