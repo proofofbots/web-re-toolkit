@@ -1,0 +1,15 @@
+[package]
+name = "wre-behavior"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic synthetic pointer, touch and key streams with timing a collector will accept"
+
+[dependencies]
+wre-core.workspace = true
+wre-crypto.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
