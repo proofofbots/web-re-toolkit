@@ -1,0 +1,28 @@
+[package]
+name = "wre-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proxy plumbing, HTTP client and transport fingerprinting for the web reverse engineering toolkit"
+
+[dependencies]
+wre-core.workspace = true
+
+anyhow.workspace = true
+base64.workspace = true
+byteorder.workspace = true
+hex.workspace = true
+indexmap.workspace = true
+md-5.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-socks.workspace = true
+tracing.workspace = true
+url.workspace = true
