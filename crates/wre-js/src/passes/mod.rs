@@ -2,6 +2,7 @@ pub mod bindings;
 pub mod simplify;
 pub mod structure;
 pub mod tables;
+pub mod unflatten;
 pub mod wrappers;
 
 use crate::naming::rename_identifiers;
@@ -19,6 +20,12 @@ pub const REGISTRY: &[PassSpec] = &[
         description: "give every branch and loop a block so statements can be spliced in",
         needs_scope: false,
         run: structure::ensure_blocks,
+    },
+    PassSpec {
+        name: "unflatten-switch-order",
+        description: "put a shuffled while-switch dispatch back into source order",
+        needs_scope: false,
+        run: unflatten::unflatten_switch_order,
     },
     PassSpec {
         name: "split-declarations",

@@ -9,6 +9,7 @@ description = "JavaScript frontend, pass pipeline and deobfuscation backends bui
 
 [dependencies]
 wre-core.workspace = true
+wre-crypto.workspace = true
 
 anyhow.workspace = true
 base64.workspace = true

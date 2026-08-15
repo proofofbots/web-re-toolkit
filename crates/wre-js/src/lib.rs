@@ -1,11 +1,15 @@
+pub mod equivalence;
 pub mod eval;
+pub mod integrity;
 pub mod naming;
 pub mod passes;
 pub mod pipeline;
 pub mod splice;
 pub mod surface;
 
+pub use equivalence::{Equivalence, compare_values, free_identifiers};
 pub use eval::{Const, eval, is_pure};
+pub use integrity::{Guard, Report as IntegrityReport, Scope as IntegrityScope};
 pub use naming::{Evidence, EvidenceIndex, is_junk_name, slug};
 pub use passes::{REGISTRY, find, names, pipeline_named, standard_pipeline};
 pub use pipeline::{
