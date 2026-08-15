@@ -1,0 +1,25 @@
+[package]
+name = "wre-target"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Target adapter manifests: the only per-research configuration the toolkit needs"
+
+[dependencies]
+wre-core.workspace = true
+wre-js.workspace = true
+wre-live.workspace = true
+wre-probe.workspace = true
+wre-vm.workspace = true
+wre-wire.workspace = true
+
+anyhow.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
