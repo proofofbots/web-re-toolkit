@@ -1,11 +1,30 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    #[default]
+    Presence,
+    Concealment,
+}
+
+impl Kind {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Kind::Presence => "something an automated browser leaves behind",
+            Kind::Concealment => "an attempt to hide a tell, which is a tell of its own",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Marker {
     pub name: String,
     pub group: String,
     pub source: String,
     pub note: String,
+    #[serde(default)]
+    pub kind: Kind,
 }
 
 impl Marker {
@@ -15,7 +34,12 @@ impl Marker {
             group: group.to_string(),
             source: source.to_string(),
             note: note.to_string(),
+            kind: Kind::Presence,
         }
+    }
+
+    fn concealment(name: &str, group: &str, note: &str, source: &str) -> Self {
+        Self { kind: Kind::Concealment, ..Self::new(name, group, note, source) }
     }
 }
 
@@ -105,6 +129,306 @@ pub fn automation_markers() -> Vec<Marker> {
             "an empty media device list",
             "navigator.mediaDevices.enumerateDevices = function () { return Promise.resolve([]); };",
         ),
+        Marker::new(
+            "webdriver-function-globals",
+            "globals",
+            "the __webdriver_* and __driver_* function pairs several drivers install",
+            "window.__webdriverFuncgeb = function () {}; window.__webdriver__chr = true; window.__webdriver_script_fn = function () {}; window.__webdriver_script_func = function () {}; window.__webdriver_unwrapped = function () {}; window.__driver_unwrapped = function () {};",
+        ),
+        Marker::new(
+            "fxdriver-globals",
+            "globals",
+            "the firefox driver evaluate pair",
+            "window.__fxdriver_evaluate = function () {}; window.__fxdriver_unwrapped = function () {};",
+        ),
+        Marker::new(
+            "selenium-recorder-globals",
+            "globals",
+            "the selenium ide recorder and its async executor",
+            "window._Selenium_IDE_Recorder = {}; window.__$webdriverAsyncExecutor = {}; window.__selenium_unwrapped = function () {}; window.callSelenium = function () {}; window.calledSelenium = true;",
+        ),
+        Marker::new(
+            "playwright-globals",
+            "globals",
+            "the playwright recorder, clock and init script hooks",
+            "window.__pw_recorderRecordAction = function () {}; window.__pw_recorderState = {}; window.__pw_devtools__ = {}; window.__pwClock = {}; window.__pwInitScripts = {};",
+        ),
+        Marker::new(
+            "puppeteer-stealth-globals",
+            "globals",
+            "the helper names puppeteer-extra stealth leaves in scope",
+            "window.runHeadlessFixes = function () {}; window.overrideStatic = function () {}; window.addContentWindowProxy = function () {};",
+        ),
+        Marker::new(
+            "nightmare-globals",
+            "globals",
+            "the nightmare bridge object",
+            "window.__nightmare = {}; window.__nightmare_ipc = {};",
+        ),
+        Marker::new(
+            "phantomas-globals",
+            "globals",
+            "the phantomas instrumentation pair",
+            "window.__phantomas = {}; window.calledPhantom = true;",
+        ),
+        Marker::new(
+            "watir-globals",
+            "globals",
+            "the watir and watin dialog recorders",
+            "window.__lastWatirAlert = ''; window.__lastWatirConfirm = ''; window.__lastWatirPrompt = ''; window.watinExpressionError = ''; window.watinExpressionResult = '';",
+        ),
+        Marker::new(
+            "spynner-globals",
+            "globals",
+            "the spynner load flag",
+            "window.spynner_additional_js_loaded = true;",
+        ),
+        Marker::new(
+            "dom-automation-controller",
+            "globals",
+            "the chrome automation controller binding",
+            "window.domAutomationController = { send: function () {} };",
+        ),
+        Marker::new(
+            "cefsharp-global",
+            "globals",
+            "the embedded chromium bridge object",
+            "window.CefSharp = { PostMessage: function () {} };",
+        ),
+        Marker::new(
+            "awesomium-global",
+            "globals",
+            "the awesomium embedded browser bridge",
+            "window.awesomium = {};",
+        ),
+        Marker::new(
+            "cdp-binding-names",
+            "globals",
+            "an exposed binding function, which counts as an extra own property of window",
+            "window.__wreExposedBinding = function () {}; Object.defineProperty(window.__wreExposedBinding, 'name', { value: 'cdpBinding' });",
+        ),
+        Marker::new(
+            "hardware-concurrency-one",
+            "hardware",
+            "a single logical core, rare on the desktops these builds claim to be",
+            "Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', { get: function () { return 1; }, configurable: true });",
+        ),
+        Marker::new(
+            "device-memory-missing",
+            "hardware",
+            "deviceMemory absent on a build whose user agent says chrome",
+            "delete Navigator.prototype.deviceMemory;",
+        ),
+        Marker::new(
+            "no-battery",
+            "hardware",
+            "getBattery missing or rejecting",
+            "Navigator.prototype.getBattery = function () { return Promise.reject(new Error('not supported')); };",
+        ),
+        Marker::new(
+            "no-gamepads",
+            "hardware",
+            "an empty gamepad list where a real build returns four null slots",
+            "Navigator.prototype.getGamepads = function () { return []; };",
+        ),
+        Marker::new(
+            "shared-array-buffer-missing",
+            "globals",
+            "SharedArrayBuffer removed, which also implies the isolation headers are absent",
+            "delete window.SharedArrayBuffer;",
+        ),
+        Marker::new(
+            "no-speech-voices",
+            "media",
+            "an empty speech synthesis voice list",
+            "window.speechSynthesis.getVoices = function () { return []; };",
+        ),
+        Marker::new(
+            "canplaytype-empty",
+            "media",
+            "canPlayType answering empty for every codec",
+            "HTMLMediaElement.prototype.canPlayType = function () { return ''; };",
+        ),
+        Marker::new(
+            "no-webrtc",
+            "network",
+            "RTCPeerConnection removed, so the ice candidate probe finds nothing",
+            "delete window.RTCPeerConnection; delete window.webkitRTCPeerConnection;",
+        ),
+        Marker::new(
+            "zero-inner-dimensions",
+            "window",
+            "an inner viewport of zero, which no rendered page has",
+            "Object.defineProperty(window, 'innerWidth', { get: function () { return 0; }, configurable: true }); Object.defineProperty(window, 'innerHeight', { get: function () { return 0; }, configurable: true });",
+        ),
+        Marker::new(
+            "screen-equals-viewport",
+            "window",
+            "screen and viewport exactly equal, so the browser reports no chrome at all",
+            "Object.defineProperty(Screen.prototype, 'availWidth', { get: function () { return window.innerWidth; }, configurable: true }); Object.defineProperty(Screen.prototype, 'availHeight', { get: function () { return window.innerHeight; }, configurable: true });",
+        ),
+        Marker::new(
+            "no-screen-orientation",
+            "window",
+            "screen.orientation missing",
+            "delete Screen.prototype.orientation;",
+        ),
+        Marker::new(
+            "colour-depth-mismatch",
+            "window",
+            "a colour depth no real display reports",
+            "Object.defineProperty(Screen.prototype, 'colorDepth', { get: function () { return 8; }, configurable: true });",
+        ),
+        Marker::new(
+            "empty-mimetypes",
+            "navigator",
+            "an empty mimeTypes table alongside a populated plugin list",
+            "Object.defineProperty(Navigator.prototype, 'mimeTypes', { get: function () { return []; }, configurable: true });",
+        ),
+        Marker::new(
+            "platform-disagrees-with-agent",
+            "navigator",
+            "navigator.platform saying linux while the user agent claims macintosh",
+            "Object.defineProperty(Navigator.prototype, 'platform', { get: function () { return 'Linux x86_64'; }, configurable: true });",
+        ),
+        Marker::new(
+            "no-user-agent-data",
+            "navigator",
+            "userAgentData missing on a build whose user agent claims a recent chrome",
+            "delete Navigator.prototype.userAgentData;",
+        ),
+        Marker::new(
+            "timezone-disagrees-with-offset",
+            "locale",
+            "Intl reporting one zone while getTimezoneOffset reports another",
+            "Date.prototype.getTimezoneOffset = function () { return 0; };",
+        ),
+        Marker::new(
+            "no-indexeddb",
+            "storage",
+            "indexedDB removed",
+            "delete window.indexedDB;",
+        ),
+        Marker::new(
+            "storage-throws",
+            "storage",
+            "localStorage present but throwing on write, as in a blocked context",
+            "Object.defineProperty(window, 'localStorage', { get: function () { throw new DOMException('denied', 'SecurityError'); }, configurable: true });",
+        ),
+        Marker::new(
+            "no-storage-estimate",
+            "storage",
+            "the quota estimate missing",
+            "delete StorageManager.prototype.estimate;",
+        ),
+        Marker::new(
+            "canvas-blank",
+            "graphics",
+            "a canvas that renders nothing, so every fingerprint hashes the same",
+            "HTMLCanvasElement.prototype.toDataURL = function () { return 'data:image/png;base64,iVBORw0KGgo='; };",
+        ),
+        Marker::new(
+            "canvas-noise",
+            "graphics",
+            "per read noise in the canvas, which makes the same page hash differently twice",
+            "var getImageData = CanvasRenderingContext2D.prototype.getImageData; CanvasRenderingContext2D.prototype.getImageData = function () { var data = getImageData.apply(this, arguments); for (var i = 0; i < data.data.length; i += 997) { data.data[i] ^= 1; } return data; };",
+        ),
+        Marker::new(
+            "no-webgl2",
+            "graphics",
+            "webgl2 unavailable while webgl1 works",
+            "var getContext = HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext = function (kind) { if (kind === 'webgl2') return null; return getContext.apply(this, arguments); };",
+        ),
+        Marker::new(
+            "no-webgl-debug-info",
+            "graphics",
+            "the unmasked vendor extension missing, which real desktop chrome exposes",
+            "var getExtension = WebGLRenderingContext.prototype.getExtension; WebGLRenderingContext.prototype.getExtension = function (name) { if (name === 'WEBGL_debug_renderer_info') return null; return getExtension.apply(this, arguments); };",
+        ),
+        Marker::new(
+            "audio-context-silent",
+            "audio",
+            "an offline audio render that returns silence",
+            "var getChannelData = AudioBuffer.prototype.getChannelData; AudioBuffer.prototype.getChannelData = function () { var data = getChannelData.apply(this, arguments); data.fill(0); return data; };",
+        ),
+        Marker::new(
+            "no-fonts",
+            "fonts",
+            "every font measuring the same width, so the font probe finds one family",
+            "Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { get: function () { return 100; }, configurable: true });",
+        ),
+        Marker::new(
+            "error-stack-empty",
+            "errors",
+            "an empty stack on every error, which hides the frame count a real engine gives",
+            "Object.defineProperty(Error.prototype, 'stack', { get: function () { return ''; }, configurable: true });",
+        ),
+        Marker::new(
+            "prepare-stack-trace-set",
+            "errors",
+            "Error.prepareStackTrace replaced, which the v8 stack format probe notices",
+            "Error.prepareStackTrace = function () { return ''; };",
+        ),
+        Marker::new(
+            "no-devtools-detect",
+            "errors",
+            "a console.debug that never formats its argument, so the devtools probe reads closed",
+            "console.debug = function () {};",
+        ),
+        Marker::concealment(
+            "webdriver-hidden",
+            "concealment",
+            "navigator.webdriver forced false through a getter, which leaves an accessor where a data property belongs",
+            "Object.defineProperty(Navigator.prototype, 'webdriver', { get: function () { return false; }, configurable: true });",
+        ),
+        Marker::concealment(
+            "webdriver-deleted",
+            "concealment",
+            "the webdriver property deleted from the prototype rather than set false",
+            "delete Navigator.prototype.webdriver;",
+        ),
+        Marker::concealment(
+            "tostring-proxied",
+            "concealment",
+            "Function.prototype.toString routed through a proxy so patched natives read clean",
+            "Function.prototype.toString = new Proxy(Function.prototype.toString, { apply: function (target, self, args) { return Reflect.apply(target, self, args); } });",
+        ),
+        Marker::concealment(
+            "user-agent-proxied",
+            "concealment",
+            "the user agent served through a proxy, which changes the property descriptor kind",
+            "var navigatorProxy = new Proxy(navigator, { get: function (target, key) { return Reflect.get(target, key); } }); Object.defineProperty(window, 'navigator', { get: function () { return navigatorProxy; }, configurable: true });",
+        ),
+        Marker::concealment(
+            "plugins-faked",
+            "concealment",
+            "a hand built plugin array whose entries are plain objects rather than Plugin instances",
+            "Object.defineProperty(Navigator.prototype, 'plugins', { get: function () { return [{ name: 'Chrome PDF Plugin' }, { name: 'Chrome PDF Viewer' }]; }, configurable: true });",
+        ),
+        Marker::concealment(
+            "chrome-runtime-faked",
+            "concealment",
+            "a hand built window.chrome whose members are plain functions",
+            "window.chrome = { runtime: {}, loadTimes: function () {}, csi: function () {}, app: { isInstalled: false } };",
+        ),
+        Marker::concealment(
+            "permissions-query-patched",
+            "concealment",
+            "permissions.query replaced so the notification answer agrees with Notification.permission",
+            "var query = navigator.permissions.query; navigator.permissions.query = function (spec) { return spec && spec.name === 'notifications' ? Promise.resolve({ state: Notification.permission }) : query.apply(navigator.permissions, arguments); };",
+        ),
+        Marker::concealment(
+            "getparameter-patched",
+            "concealment",
+            "WebGL getParameter replaced to report a discrete gpu",
+            "var getParameter = WebGLRenderingContext.prototype.getParameter; WebGLRenderingContext.prototype.getParameter = function (name) { if (name === 37445) return 'Intel Inc.'; if (name === 37446) return 'Intel Iris OpenGL Engine'; return getParameter.apply(this, arguments); };",
+        ),
+        Marker::concealment(
+            "stack-scrubbed",
+            "concealment",
+            "proxy frames stripped out of error stacks, which shortens the stack a real throw produces",
+            "var descriptor = Object.getOwnPropertyDescriptor(Error.prototype, 'stack'); Object.defineProperty(Error.prototype, 'stack', { get: function () { var text = descriptor && descriptor.get ? descriptor.get.call(this) : ''; return String(text).split('\\n').filter(function (line) { return line.indexOf('Proxy') < 0; }).join('\\n'); }, configurable: true });",
+        ),
     ]
 }
 
@@ -112,6 +436,20 @@ pub fn by_name(name: &str) -> Option<Marker> {
     automation_markers()
         .into_iter()
         .find(|marker| marker.name == name)
+}
+
+pub fn of_kind(kind: Kind) -> Vec<Marker> {
+    automation_markers()
+        .into_iter()
+        .filter(|marker| marker.kind == kind)
+        .collect()
+}
+
+pub fn in_group(group: &str) -> Vec<Marker> {
+    automation_markers()
+        .into_iter()
+        .filter(|marker| marker.group == group)
+        .collect()
 }
 
 pub fn groups() -> Vec<String> {
