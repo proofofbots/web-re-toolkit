@@ -1,0 +1,14 @@
+[package]
+name = "wre-pack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Custom alphabet encodings, variable radix streams, linear digit fitting and charset bitfields"
+
+[dependencies]
+wre-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
