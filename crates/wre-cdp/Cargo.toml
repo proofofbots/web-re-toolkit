@@ -1,0 +1,25 @@
+[package]
+name = "wre-cdp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chrome lifecycle and a raw Chrome DevTools Protocol client"
+
+[dependencies]
+wre-core.workspace = true
+wre-net.workspace = true
+
+anyhow.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+indexmap.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+url.workspace = true
