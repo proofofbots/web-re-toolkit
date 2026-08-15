@@ -1,0 +1,19 @@
+[package]
+name = "wre-env"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Browser environment snapshots and lazy realm materialisation"
+
+[dependencies]
+wre-core.workspace = true
+wre-live.workspace = true
+
+anyhow.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
