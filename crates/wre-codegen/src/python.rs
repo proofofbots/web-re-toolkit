@@ -160,7 +160,7 @@ for row in "${{targets[@]}}"; do
     continue
   fi
 
-  rm -rf "$here/$package/bin"
+  rm -rf "$here/$package/bin" "$here/build" "$here"/*.egg-info
   mkdir -p "$here/$package/bin/$triple"
   cp "$source/"* "$here/$package/bin/$triple/"
   chmod +x "$here/$package/bin/$triple/"*
@@ -169,7 +169,24 @@ for row in "${{targets[@]}}"; do
   WRE_WHEEL_PLATFORM="$tag" python3 -m build --wheel --outdir "$here/dist" "$here"
 done
 
-rm -rf "$here/$package/bin"
+rm -rf "$here/$package/bin" "$here/build" "$here"/*.egg-info
+
+limit=104857600
+oversize=0
+for wheel in "$here/dist/"*.whl; do
+  bytes="$(wc -c < "$wheel")"
+  printf '%8s MB  %s\n' "$((bytes / 1048576))" "$(basename "$wheel")"
+  if [ "$bytes" -gt "$limit" ]; then
+    echo "  over PyPI's 100 MB per file limit, it will be rejected" >&2
+    oversize=1
+  fi
+done
+
+if [ "$oversize" -ne 0 ]; then
+  echo "refusing to hand oversized wheels to twine" >&2
+  exit 1
+fi
+
 echo "wheels are in $here/dist"
 "#,
         package = package_dir(plan),
