@@ -1,10 +1,11 @@
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
+use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 use wre_core::error::{Error, Result};
 
+use crate::emulate::Fingerprint;
 use crate::proxy::ProxySpec;
 
 pub const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -12,7 +13,8 @@ pub const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) App
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     pub proxy: Option<ProxySpec>,
-    pub user_agent: String,
+    pub fingerprint: Option<Fingerprint>,
+    pub user_agent: Option<String>,
     pub timeout: Duration,
     pub accept_invalid_certs: bool,
     pub http2_only: bool,
@@ -24,7 +26,8 @@ impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             proxy: None,
-            user_agent: CHROME_UA.to_string(),
+            fingerprint: None,
+            user_agent: None,
             timeout: Duration::from_secs(30),
             accept_invalid_certs: false,
             http2_only: false,
@@ -34,30 +37,58 @@ impl Default for ClientOptions {
     }
 }
 
-#[derive(Debug, Clone)]
+impl ClientOptions {
+    /// The fingerprint the client will emulate: the explicit one, otherwise the closest
+    /// match for the requested user agent, otherwise the crate default.
+    pub fn resolved_fingerprint(&self) -> Fingerprint {
+        self.fingerprint
+            .or_else(|| self.user_agent.as_deref().and_then(Fingerprint::from_user_agent))
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone)]
 pub struct Client {
-    inner: reqwest::Client,
+    inner: wreq::Client,
     options: ClientOptions,
+    fingerprint: Fingerprint,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("fingerprint", &self.fingerprint.to_string())
+            .field("options", &self.options)
+            .finish()
+    }
 }
 
 impl Client {
     pub fn new(options: ClientOptions) -> Result<Self> {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(options.user_agent.clone())
+        let fingerprint = options.resolved_fingerprint();
+
+        let mut builder = wreq::Client::builder()
+            .emulation(fingerprint)
             .timeout(options.timeout)
-            .danger_accept_invalid_certs(options.accept_invalid_certs)
+            .tls_cert_verification(!options.accept_invalid_certs)
+            .cookie_store(options.cookies)
             .redirect(if options.redirects == 0 {
-                reqwest::redirect::Policy::none()
+                wreq::redirect::Policy::none()
             } else {
-                reqwest::redirect::Policy::limited(options.redirects)
+                wreq::redirect::Policy::limited(options.redirects)
             });
 
+        if let Some(agent) = &options.user_agent {
+            builder = builder.user_agent(agent.as_str());
+        }
+
         if options.http2_only {
-            builder = builder.http2_prior_knowledge();
+            builder = builder.http2_only();
         }
 
         if let Some(proxy) = &options.proxy {
-            let configured = reqwest::Proxy::all(proxy.url())
+            let configured = wreq::Proxy::all(proxy.url())
                 .map_err(|error| Error::msg(format!("proxy rejected: {error}")))?;
             builder = builder.proxy(configured);
         }
@@ -66,7 +97,7 @@ impl Client {
             .build()
             .map_err(|error| Error::msg(format!("http client build failed: {error}")))?;
 
-        Ok(Self { inner, options })
+        Ok(Self { inner, options, fingerprint })
     }
 
     pub fn plain() -> Result<Self> {
@@ -77,12 +108,32 @@ impl Client {
         Self::new(ClientOptions { proxy, ..ClientOptions::default() })
     }
 
-    pub fn raw(&self) -> &reqwest::Client {
+    pub fn emulating(fingerprint: Fingerprint, proxy: Option<ProxySpec>) -> Result<Self> {
+        Self::new(ClientOptions {
+            proxy,
+            fingerprint: Some(fingerprint),
+            ..ClientOptions::default()
+        })
+    }
+
+    pub fn raw(&self) -> &wreq::Client {
         &self.inner
     }
 
     pub fn options(&self) -> &ClientOptions {
         &self.options
+    }
+
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.fingerprint
+    }
+
+    /// The `User-Agent` this client sends unless a request overrides it.
+    pub fn user_agent(&self) -> Option<String> {
+        self.options
+            .user_agent
+            .clone()
+            .or_else(|| self.fingerprint.user_agent())
     }
 
     pub async fn get_text(&self, url: &str) -> Result<String> {
@@ -115,10 +166,15 @@ impl Client {
     }
 
     pub async fn fetch(&self, request: FetchRequest) -> Result<FetchResponse> {
-        let method = reqwest::Method::from_bytes(request.method.as_bytes())
+        let method = wreq::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| Error::msg(format!("bad method {}", request.method)))?;
 
         let mut builder = self.inner.request(method, &request.url);
+
+        if let Some(fingerprint) = request.fingerprint {
+            builder = builder.emulation(fingerprint);
+        }
+
         builder = builder.headers(header_map(&request.headers)?);
 
         if let Some(body) = request.body {
@@ -131,7 +187,7 @@ impl Client {
             .map_err(|error| Error::msg(format!("{} {} failed: {error}", request.method, request.url)))?;
 
         let status = response.status().as_u16();
-        let final_url = response.url().to_string();
+        let final_url = response.uri().to_string();
         let version = format!("{:?}", response.version());
 
         let mut headers = Vec::new();
@@ -181,6 +237,8 @@ pub struct FetchRequest {
     pub headers: Vec<(String, String)>,
     #[serde(default)]
     pub body: Option<Vec<u8>>,
+    #[serde(default)]
+    pub fingerprint: Option<Fingerprint>,
 }
 
 fn get_method() -> String {
@@ -189,20 +247,25 @@ fn get_method() -> String {
 
 impl FetchRequest {
     pub fn get(url: impl Into<String>) -> Self {
-        Self { url: url.into(), method: get_method(), headers: Vec::new(), body: None }
+        Self { url: url.into(), method: get_method(), ..Self::default() }
     }
 
     pub fn post(url: impl Into<String>, body: Vec<u8>) -> Self {
         Self {
             url: url.into(),
             method: "POST".to_string(),
-            headers: Vec::new(),
             body: Some(body),
+            ..Self::default()
         }
     }
 
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    pub fn emulating(mut self, fingerprint: Fingerprint) -> Self {
+        self.fingerprint = Some(fingerprint);
         self
     }
 }

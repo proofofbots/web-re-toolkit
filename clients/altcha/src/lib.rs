@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use wre_client::client::{Client, Registration};
-use wre_client::context::{Call, Clock, Ctx, FetchRequest};
+use wre_client::context::{Call, Clock, Ctx, FetchRequest, Http, HttpOptions};
 use wre_client::error::{ClientError, ClientResult};
 use wre_client::shape::{Shape, decode_bytes, encode_bytes, field};
 use wre_client::spec::{Capabilities, ClientDescriptor, Concurrency, EventSpec, OpSpec};
@@ -325,6 +325,10 @@ fn config_shape() -> Shape {
                 .summary("Answer an interaction signature request when the server asks for one")
                 .with_default(json!(true)),
             field("proxy", Shape::optional(Shape::Str)),
+            field("fingerprint", Shape::optional(Shape::Str))
+                .summary("Client to emulate as profile[:platform], for example chrome_141:windows"),
+            field("user_agent", Shape::optional(Shape::Str))
+                .summary("User agent to send, which also picks the matching transport fingerprint"),
             field("clock_ms", Shape::optional(Shape::Int))
                 .summary("Freeze the clock, which fixes the expiry checks"),
             field("seed", Shape::optional(Shape::Int))
@@ -350,6 +354,10 @@ struct Config {
     his: bool,
     #[serde(default)]
     proxy: Option<String>,
+    #[serde(default)]
+    fingerprint: Option<String>,
+    #[serde(default)]
+    user_agent: Option<String>,
     #[serde(default)]
     clock_ms: Option<u64>,
     #[serde(default)]
@@ -399,8 +407,16 @@ struct Altcha {
 }
 
 impl Altcha {
+    fn http(&self) -> ClientResult<Http> {
+        let mut options = HttpOptions::with_proxy(self.config.proxy.as_deref());
+        options.fingerprint = self.config.fingerprint.clone();
+        options.user_agent = self.config.user_agent.clone();
+        options.timeout_secs = Some(self.config.timeout_ms.div_ceil(1000).max(1));
+        self.ctx.http_with(options)
+    }
+
     fn fetch_challenge(&mut self, url: &str, his: bool, call: &Call) -> ClientResult<Value> {
-        let http = self.ctx.http(self.config.proxy.as_deref())?;
+        let http = self.http()?;
         let response = http.fetch(FetchRequest::get(url))?;
         reject_status(url, response.status)?;
 
@@ -955,7 +971,7 @@ impl Client for Altcha {
                     }
                 }
 
-                let http = self.ctx.http(self.config.proxy.as_deref())?;
+                let http = self.http()?;
                 let request = FetchRequest::post(
                     url.clone(),
                     serde_json::to_vec(&Value::Object(body)).unwrap_or_default(),

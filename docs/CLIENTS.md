@@ -36,6 +36,7 @@ pub fn describe() -> ClientDescriptor {
         })
         .config(Shape::object("AcmeConfig", [
             field("proxy", Shape::optional(Shape::Str)),
+            field("fingerprint", Shape::optional(Shape::Str)),
             field("timeout_ms", Shape::Int).with_default(json!(30_000)),
         ]))
         .op(OpSpec::new("solve", facts_shape(), solved_shape())
@@ -68,7 +69,8 @@ Parameters arrive validated against the declared shape with defaults filled in.
 
 A client never opens a resource. `Ctx` hands it:
 
-- `http(proxy)`, a blocking wrapper over `wre-net`'s client, pooled per proxy and user agent.
+- `http(proxy)`, a blocking wrapper over `wre-net`'s client, pooled per proxy, fingerprint and user agent.
+- `http_with(HttpOptions)`, the same client with the transport spelled out. `fingerprint` takes a `profile[:platform]` spec such as `chrome_141:windows` and sets the TLS handshake, the HTTP/2 settings and the default headers, user agent included. Set `user_agent` on its own and the nearest profile for that agent is used, so the header and the handshake do not contradict each other. Set neither and the client emulates Chrome 140 on macOS. A single request can override the choice with `FetchRequest::emulating(fingerprint)`.
 - `now_ms()` and `random_u64()`, both overridable.
 - `store()` and `session_store()`, file backed key value scratch under the host's state directory.
 - `metric(name, value)` and `count(name)`, which show up in the `metrics` op.

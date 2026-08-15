@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use wre_core::store::Store;
 use wre_net::proxy::ProxySpec;
 
+pub use wre_net::emulate::{Fingerprint, Platform, Profile};
 pub use wre_net::http::{FetchRequest, FetchResponse};
 pub use wre_net::proxy::ProxyScheme;
 
@@ -82,6 +83,14 @@ impl Http {
     pub fn raw(&self) -> &HttpClient {
         &self.client
     }
+
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.client.fingerprint()
+    }
+
+    pub fn user_agent(&self) -> Option<String> {
+        self.client.user_agent()
+    }
 }
 
 pub struct Services {
@@ -147,8 +156,13 @@ impl Services {
         };
 
         let mut built = ClientOptions { proxy, ..ClientOptions::default() };
+        if let Some(spec) = &options.fingerprint {
+            built.fingerprint = Some(spec.parse::<Fingerprint>().map_err(|error| {
+                ClientError::bad_input(format!("fingerprint rejected: {error}"))
+            })?);
+        }
         if let Some(agent) = &options.user_agent {
-            built.user_agent = agent.clone();
+            built.user_agent = Some(agent.clone());
         }
         if let Some(seconds) = options.timeout_secs {
             built.timeout = Duration::from_secs(seconds);
@@ -169,6 +183,7 @@ impl Services {
 #[derive(Debug, Clone, Default)]
 pub struct HttpOptions {
     pub proxy: Option<String>,
+    pub fingerprint: Option<String>,
     pub user_agent: Option<String>,
     pub timeout_secs: Option<u64>,
     pub http2_only: bool,
@@ -180,10 +195,16 @@ impl HttpOptions {
         Self { proxy: proxy.map(str::to_string), redirects: 10, ..Self::default() }
     }
 
+    pub fn emulating(mut self, fingerprint: &str) -> Self {
+        self.fingerprint = Some(fingerprint.to_string());
+        self
+    }
+
     fn key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}",
             self.proxy.as_deref().unwrap_or("direct"),
+            self.fingerprint.as_deref().unwrap_or("auto"),
             self.user_agent.as_deref().unwrap_or("default"),
             self.timeout_secs.unwrap_or(30),
             self.http2_only,
