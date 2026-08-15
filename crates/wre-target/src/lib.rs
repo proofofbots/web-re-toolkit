@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use wre_core::error::{Error, Result, io};
+use wre_ident::locate::{Clue, Evidence, Rule};
+use wre_js::integrity::Guard;
 use wre_js::pipeline::{Config, MemberReadSpec, RenameConfig, SourceKind};
 use wre_js::surface::SignatureRule;
+use wre_sandbox::profile::Profile;
 use wre_live::mount::{MountPlan, SourcePatch};
 use wre_probe::{MethodTrap, PropertyTrap, SurfaceSpec};
 use wre_vm::probe::FrameModel;
@@ -36,6 +39,12 @@ pub struct Manifest {
     pub probe: Probe,
     #[serde(default)]
     pub checks: Vec<Check>,
+    #[serde(default)]
+    pub locate: Vec<Rule>,
+    #[serde(default)]
+    pub integrity: Option<Guard>,
+    #[serde(default)]
+    pub sandbox: Option<Profile>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -470,6 +479,33 @@ impl Manifest {
             }
         }
 
+        for rule in &self.locate {
+            if rule.clues.is_empty() {
+                return Err(Error::msg(format!(
+                    "the {} role lists no evidence, so it would match everything",
+                    rule.role
+                )));
+            }
+            if rule.total_weight() <= 0.0 {
+                return Err(Error::msg(format!(
+                    "the {} role has no positive weight to score against",
+                    rule.role
+                )));
+            }
+        }
+
+        let mut roles: Vec<&str> = self.locate.iter().map(|rule| rule.role.as_str()).collect();
+        roles.sort_unstable();
+        let before_roles = roles.len();
+        roles.dedup();
+        if before_roles != roles.len() {
+            return Err(Error::msg("two locate rules share a role"));
+        }
+
+        if let Some(profile) = &self.sandbox {
+            profile.validate()?;
+        }
+
         let mut names: Vec<&str> = self.knobs.iter().map(|knob| knob.name.as_str()).collect();
         names.sort_unstable();
         let before = names.len();
@@ -549,6 +585,16 @@ impl Manifest {
                 note: "every captured body decodes and re-encodes byte for byte".to_string(),
                 ..Check::default()
             }],
+            locate: vec![Rule::new(
+                "hash",
+                vec![
+                    Clue::new(Evidence::Constants { any: vec![2166136261.0] }, 3.0).required(),
+                    Clue::new(Evidence::Arity { params: 1 }, 1.0),
+                    Clue::new(Evidence::Loops { least: 1 }, 1.0),
+                ],
+            )],
+            integrity: None,
+            sandbox: None,
         }
     }
 }

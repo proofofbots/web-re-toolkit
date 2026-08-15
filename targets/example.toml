@@ -100,3 +100,54 @@ note = "every captured body decodes and re-encodes byte for byte"
 name = "primitives mount"
 kind = "mount"
 note = "every declared role is found in the pinned build"
+
+[[locate]]
+role = "hash"
+minimum = 0.5
+
+[[locate.clues]]
+kind = "constants"
+any = [2166136261.0, 16777619.0]
+weight = 3.0
+required = true
+
+[[locate.clues]]
+kind = "arity"
+params = 1
+weight = 1.0
+
+[[locate.clues]]
+kind = "loops"
+least = 1
+weight = 1.0
+
+[[locate]]
+role = "to-hex"
+minimum = 0.5
+
+[[locate.clues]]
+kind = "properties"
+all = ["toString", "padStart"]
+weight = 3.0
+
+[[locate.clues]]
+kind = "arity"
+params = 1
+weight = 1.0
+
+[[locate]]
+role = "seal"
+minimum = 0.5
+
+[[locate.clues]]
+kind = "calls"
+role = "hash"
+weight = 3.0
+required = true
+
+[integrity]
+marker = "/\\* guard:(\\d+) \\*/"
+checksum = "murmur3"
+seed = 35549
+skip_whitespace = true
+scope = "after-marker"

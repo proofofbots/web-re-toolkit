@@ -9,6 +9,8 @@ description = "Target adapter manifests: the only per-research configuration the
 
 [dependencies]
 wre-core.workspace = true
+wre-ident.workspace = true
+wre-sandbox.workspace = true
 wre-js.workspace = true
 wre-live.workspace = true
 wre-probe.workspace = true
