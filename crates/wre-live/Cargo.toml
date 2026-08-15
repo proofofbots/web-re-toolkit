@@ -1,0 +1,22 @@
+[package]
+name = "wre-live"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedded V8 realm for running a target's own primitives and calling them from Rust"
+
+[dependencies]
+wre-core.workspace = true
+wre-js.workspace = true
+
+anyhow.workspace = true
+base64.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+v8.workspace = true
