@@ -30,6 +30,7 @@ Create one with `wre init acme --url https://acme.example/`.
 
 ```bash
 wre discover https://acme.example/ --target acme
+wre discover https://acme.example/ --target acme --fingerprint chrome_141:windows
 wre capture --target acme --scripts
 wre pin acme-2026-08-15
 wre show captures/acme-2026-08-15
@@ -51,21 +52,53 @@ wre wire schema captures/*/payload.json
 wre verify --target acme --capture captures/acme-2026-08-15
 ```
 
+Finding the same code again after the vendor rebuilds:
+
+```bash
+wre locate collect.js --target acme --lock targets/acme.lock
+wre drift targets/acme.lock collect-new.js
+wre builds collect-old.js collect-new.js
+
+wre integrity collect.js --target acme
+wre integrity collect.patched.js --target acme --resign
+wre equivalent collect.js collect.clean.js
+```
+
+Grading what you built, and planning the runs that attribute a detection:
+
+```bash
+wre grade built.json --real capture-1.json capture-2.json
+wre align --before a1.json a2.json --after b1.json b2.json
+
+wre sandbox capture
+wre sandbox check --all
+wre markers --kind concealment
+wre pools
+```
+
 ## Crates
 
 | crate | contents |
 | --- | --- |
 | `wre-core` | errors, workspace paths, the artifact store, the capture bundle schema, the address grammar, hash primitives |
-| `wre-net` | SOCKS5 proxies with session rotation, an HTTP client, ClientHello parsing and building, JA3 and JA4, HPACK with Huffman, the Akamai HTTP/2 fingerprint |
+| `wre-crypto` | XTEA, TEA, AES, RC4, XOR streams, pluggable block chaining including data dependent emission order, seeded PRNGs, keyed substitution and permutations, murmur3, FNV, CRC32, repeating key recovery |
+| `wre-pack` | custom alphabet base-N, variable radix streams with a shape fitter, linear digit encoding recovery, keyed digit rotation, charset membership bitfields |
+| `wre-pow` | key derivations, hash chains, acceptance rules by prefix, leading zeros, folded modulus or score threshold, multi round challenges, parallel search |
+| `wre-ident` | name blind shape hashing, weighted evidence for locating a role, cross build function pairing, the lock file and the drift report |
+| `wre-signals` | value based slot alignment across builds, permutation and rotation recovery, noise filtering, provenance from an access trace |
+| `wre-sandbox` | a browser surface installed as native V8 bindings, driven by a library of profiles captured off real devices, with a miss log |
+| `wre-oracle` | finding the response feature that reflects payload state, and grading a built payload against real ones |
+| `wre-behavior` | deterministic pointer, touch and key streams with timing that is not a constant |
+| `wre-net` | SOCKS5 proxies with session rotation, an HTTP client that emulates a browser's TLS and HTTP/2 fingerprint, ClientHello parsing and building, JA3 and JA4, HPACK with Huffman, the Akamai HTTP/2 fingerprint |
 | `wre-cdp` | Chrome lifecycle and reuse, a raw CDP client over WebSocket, emulation profiles, Fetch-based script interception, a debugger with breakpoint-by-pattern and scope dumps |
 | `wre-probe` | generates the in-page instrumentation script from a declarative surface spec |
 | `wre-capture` | drives a run and writes a capture bundle |
-| `wre-js` | oxc-based parsing, a 25-pass deobfuscation pipeline run to fixpoint, evidence-based renaming, the surface index, a byte-splice backend |
+| `wre-js` | oxc-based parsing, a 26-pass deobfuscation pipeline run to fixpoint including control flow unflattening, evidence-based renaming, the surface index, self-integrity verify and re-sign, an equivalence gate, a byte-splice backend |
 | `wre-live` | an embedded V8 realm: mount a target, capture its functions as callable handles, host bridges, deterministic clock and random, execution timeouts |
 | `wre-env` | captures a browser's object graph and materialises it lazily inside a realm |
 | `wre-vm` | dispatch-loop discovery, concolic handler probing, an instruction IR, control flow recovery, a lifter to readable JavaScript |
 | `wre-wire` | codecs, an addressable payload tree, diffing, forging, schema inference, round-trip verification |
-| `wre-variants` | one-fact-at-a-time sweeps, noise floor subtraction, signal attribution, a catalogue of automation markers |
+| `wre-variants` | one-fact-at-a-time sweeps, pooled group testing with a confirmation step, noise floor subtraction, signal attribution, 64 automation markers split into what a tool leaves behind and what hiding it leaves behind |
 | `wre-report` | markdown tables, baseline diffing that ignores counter renames, the offline acceptance runner |
 | `wre-target` | the adapter manifest |
 | `wre-client` | the headless client SDK: the `Client` trait, the op schema, the sidecar protocol, a rust consumer |
@@ -87,6 +120,15 @@ wre client test --lang all
 A session owns the mounted realm and the cookies, so a caller opens one and reuses it. Each session records its calls and writes a single JSON report when a call fails. Read one back with `wre client diag <file>`. The report carries the mounted build tag, the script digest, the realm's console and error records, the call history, and the client's own `diagnostics` section, with credential-shaped values redacted.
 
 [docs/CLIENTS.md](docs/CLIENTS.md) is the authoring guide. [docs/PROTOCOL.md](docs/PROTOCOL.md) is the wire contract.
+
+## Documents
+
+| document | what it covers |
+| --- | --- |
+| [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) | locating a target's roles without depending on the text of one build, and reading the next one |
+| [docs/SANDBOX.md](docs/SANDBOX.md) | the browser surface, why it is native rather than JavaScript, and what it still does not have |
+| [docs/CLIENTS.md](docs/CLIENTS.md) | writing a headless client |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | the sidecar wire contract |
 
 ## Targets
 
@@ -112,6 +154,12 @@ params = 1
 
 **Snapshot the browser instead of writing DOM stubs.** `wre env snapshot` walks the real object graph into JSON. `wre env run` rebuilds it lazily inside a realm. Surfaces that cannot be faked in a headless realm route to a host bridge or a replay table.
 
+**Identity survives a rebuild.** Nothing important is found by matching the text of one build. A role is located by scoring several weak signals against a name blind normalisation of the AST: structural shape, magic constants, the property names it reaches, its position in the call graph, and where it matters, what it returns when you actually call it. The result is written to a lock file, and the next build is diffed against that lock, so a rebuild produces a report of what moved rather than a pattern that silently stops matching. [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) covers it.
+
+**Native shapes, replayed values.** The sandbox installs its browser surface as real V8 bindings, so accessors are native functions, wrong receivers throw `Illegal invocation`, and `Function.prototype.toString` is never patched. A surface written in JavaScript has to patch `toString` to hide itself, and that patch is more detectable than the thing it hides. The values come from `profiles/`, one file per real device captured with `wre sandbox capture`; nothing is generated. [docs/SANDBOX.md](docs/SANDBOX.md) covers it.
+
+**Attribute many facts in few runs.** Testing 64 automation markers one at a time is 64 page loads. A pooled design plants them in groups so that each marker sits in a unique combination of runs, which takes 7. A pooled verdict is then confirmed by planting that one marker alone, because two markers together can produce the pattern of a third.
+
 **Subtract the noise floor.** Run the baseline twice before sweeping anything. Addresses that differ between two identical runs are noise, and every sweep result is reported with them removed.
 
 **Every decode is checked by re-encoding.** `verify_roundtrip` opens a body, seals it again, and compares bytes. A codec that cannot reproduce the original is reported as such.
@@ -136,7 +184,11 @@ The deobfuscation passes produce a reconstruction, not a byte-equivalent program
 
 The lifter emits structured control flow when the CFG is reducible and falls back to a labelled dispatch loop when it is not. Both are correct. Unknown opcodes are lifted as `opN(args)` calls and reported, not guessed.
 
-`wre-net` computes and builds transport fingerprints and can shape a ClientHello for measurement. Impersonating a specific JA3 across a live TLS session needs a custom TLS stack and is not included.
+`wre-net` sends requests through `wreq`, so the ClientHello, HTTP/2 settings and header order match the browser profile the client emulates, and a client built from a user agent picks the nearest profile for that agent so the transport and the header agree. The profile set is whatever `wreq-util` ships, so a browser release is only reachable once it lands upstream, and a profile is one build's snapshot: it carries no per-installation variation, and nothing here hides a mismatch between the emulated client and the payload it sends.
+
+The sandbox has no DOM. A target that creates an element and measures it will not run. The capture page fills the layout, canvas and font tables that work would need, and nothing reads them yet.
+
+Similarity between two builds is a structural estimate, not a proof. A function reported as edited at 90 percent shared structure still has to be read.
 
 The V8 realm is a real engine with a fake environment. A target that reaches for something the snapshot did not capture gets `undefined`, which appears in the probe records.
 

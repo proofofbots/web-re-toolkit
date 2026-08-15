@@ -157,8 +157,6 @@ python3 reference/altcha/lab/server.py &
 cargo test -p wre-client-altcha --test lab -- --ignored
 ```
 
-Two toolkit bugs surfaced during the pass and are fixed in this commit: the Chrome version probe read the DevTools HTTP response until EOF, which never comes on Chrome 151 because it keeps the connection open, and `wre mount` matched signatures against the source before applying the manifest's patches, so a target that needs unwrapping could never match one.
-
 ## The playground
 
 `playground.altcha.org` is a static SPA. It creates challenges in the page with the hard coded secret `signature.secret` and verifies them locally, so it exercises the widget and the algorithm switch, not a server. Useful for reading behaviour, useless as a live target.
