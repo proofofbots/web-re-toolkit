@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>altcha lab</title>
+    <script async defer type="module" src="https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js"></script>
+  </head>
+  <body>
+    <form id="form" method="post" action="/verify">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="ada@example.com" />
+      <altcha-widget
+        id="widget"
+        name="altcha"
+        auto="onload"
+        challenge="/altcha/challenge"
+      ></altcha-widget>
+      <button type="submit">Send</button>
+    </form>
+
+    <script>
+      const widget = document.getElementById('widget');
+
+      widget.addEventListener('verified', async (event) => {
+        const payload = event.detail.payload;
+        window.__altchaPayload = payload;
+
+        const response = await fetch('/verify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ payload, email: document.getElementById('email').value }),
+        });
+
+        window.__altchaResult = await response.json();
+      });
+    </script>
+  </body>
+</html>

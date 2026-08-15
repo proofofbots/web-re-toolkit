@@ -12,6 +12,7 @@ script_patterns = [
   'src="([^"]*/altcha@[^"]*)"',
 ]
 endpoint_patterns = [
+  'challenge="(https?://[^"]+|/[^"]+)"',
   'challengeurl="([^"]+)"',
   'verifyurl="([^"]+)"',
   '/altcha/challenge',
@@ -35,6 +36,21 @@ drop_debugger = false
 tolerate_throw = true
 clock_ms = 1700000000000.0
 random_seed = 1
+prelude = ["globalThis.self = globalThis;"]
+
+[[live.patches]]
+find = "^\\(function\\s*\\(\\s*\\)\\s*\\{"
+replace = ""
+regex = true
+limit = 1
+required = false
+
+[[live.patches]]
+find = "\\}\\)\\(\\);?\\s*$"
+replace = ""
+regex = true
+limit = 1
+required = false
 
 [[live.signatures]]
 role = "hexToBuffer"

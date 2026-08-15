@@ -1,0 +1,708 @@
+{
+  "schema": 1,
+  "id": "altcha-20260815T193100Z",
+  "target": "altcha",
+  "url": "http://localhost:8791/",
+  "captured_at": "2026-08-15T19:31:00.559063Z",
+  "label": null,
+  "tool": {
+    "name": "wre-capture",
+    "version": "0.1.0",
+    "command": [
+      "http://localhost:8791/"
+    ]
+  },
+  "browser": {
+    "product": "Chrome/151.0.7922.138",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "protocol_version": "1.3",
+    "headless": false,
+    "profile": "/Users/robwrt/proofofbot/web-re-toolkit/artifacts/chrome/profile-9444"
+  },
+  "emulation": [
+    {
+      "method": "Emulation.setDeviceMetricsOverride",
+      "params": {
+        "width": 1512,
+        "height": 895,
+        "deviceScaleFactor": 2.0,
+        "mobile": false,
+        "screenWidth": 1512,
+        "screenHeight": 982,
+        "positionX": 0,
+        "positionY": 0
+      }
+    },
+    {
+      "method": "Emulation.setUserAgentOverride",
+      "params": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "acceptLanguage": "en-US,en;q=0.9",
+        "platform": "MacIntel"
+      }
+    },
+    {
+      "method": "Emulation.setTimezoneOverride",
+      "params": {
+        "timezoneId": "America/New_York"
+      }
+    },
+    {
+      "method": "Emulation.setTouchEmulationEnabled",
+      "params": {
+        "enabled": false,
+        "maxTouchPoints": 0
+      }
+    },
+    {
+      "method": "Emulation.setFocusEmulationEnabled",
+      "params": {
+        "enabled": true
+      }
+    },
+    {
+      "method": "Emulation.setHardwareConcurrencyOverride",
+      "params": {
+        "hardwareConcurrency": 8
+      }
+    }
+  ],
+  "requests": [
+    {
+      "id": "0AE1894BC5A336EC1CE25E9AACFA54D3",
+      "url": "http://localhost:8791/",
+      "method": "GET",
+      "resource_type": "Document",
+      "request_headers": {
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "upgrade-insecure-requests": "1",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": 200,
+      "response_headers": {
+        "content-length": "1167",
+        "content-type": "text/html; charset=utf-8",
+        "date": "Sat, 15 Aug 2026 19:31:00 GMT",
+        "server": "BaseHTTP/0.6 Python/3.14.6"
+      },
+      "response_body": {
+        "inline": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>altcha lab</title>\n    <script async defer type=\"module\" src=\"https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js\"></script>\n  </head>\n  <body>\n    <form id=\"form\" method=\"post\" action=\"/verify\">\n      <label for=\"email\">Email</label>\n      <input id=\"email\" name=\"email\" type=\"email\" value=\"ada@example.com\" />\n      <altcha-widget\n        id=\"widget\"\n        name=\"altcha\"\n        auto=\"onload\"\n        challenge=\"/altcha/challenge\"\n      ></altcha-widget>\n      <button type=\"submit\">Send</button>\n    </form>\n\n    <script>\n      const widget = document.getElementById('widget');\n\n      widget.addEventListener('verified', async (event) => {\n        const payload = event.detail.payload;\n        window.__altchaPayload = payload;\n\n        const response = await fetch('/verify', {\n          method: 'POST',\n          headers: { 'content-type': 'application/json' },\n          body: JSON.stringify({ payload, email: document.getElementById('email').value }),\n        });\n\n        window.__altchaResult = await response.json();\n      });\n    </script>\n  </body>\n</html>\n",
+        "base64": false,
+        "size": 1167,
+        "sha256": "60a203caeb8b2c4199ed0a1e99585e1be780f2784181e977fc04c8f5367619ba"
+      },
+      "remote_address": "127.0.0.1",
+      "protocol": "http/1.0",
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.577057,
+      "error": null
+    },
+    {
+      "id": "38635.2",
+      "url": "https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "origin": "http://localhost:8791",
+        "referer": "http://localhost:8791/",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": 200,
+      "response_headers": {
+        "accept-ranges": "bytes",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "*",
+        "age": "861758",
+        "alt-svc": "h3=\":443\";ma=86400,h3-29=\":443\";ma=86400,h3-27=\":443\";ma=86400",
+        "cache-control": "public, max-age=31536000, s-maxage=31536000, immutable",
+        "content-encoding": "br",
+        "content-length": "36027",
+        "content-type": "application/javascript; charset=utf-8",
+        "cross-origin-resource-policy": "cross-origin",
+        "date": "Sat, 15 Aug 2026 19:31:00 GMT",
+        "etag": "W/\"1bbcb-gvxk1EXkVXeDShpkeBp4KDeNTSM\"",
+        "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+        "timing-allow-origin": "*",
+        "vary": "Accept-Encoding",
+        "x-cache": "HIT, HIT",
+        "x-content-type-options": "nosniff",
+        "x-jsd-version": "3.2.1",
+        "x-jsd-version-type": "version",
+        "x-served-by": "cache-fra-etou8220149-FRA, cache-bma-essb1270027-BMA"
+      },
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": "151.101.193.229",
+      "protocol": "h2",
+      "initiator": "parser",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.61797,
+      "error": null
+    },
+    {
+      "id": "38635.4",
+      "url": "http://localhost:8791/altcha/challenge",
+      "method": "GET",
+      "resource_type": "Fetch",
+      "request_headers": {
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "referer": "http://localhost:8791/",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": 200,
+      "response_headers": {
+        "content-length": "312",
+        "content-type": "application/json",
+        "date": "Sat, 15 Aug 2026 19:31:00 GMT",
+        "server": "BaseHTTP/0.6 Python/3.14.6",
+        "x-altcha-config": "{\"maxnumber\": 250000}"
+      },
+      "response_body": {
+        "inline": "{\"parameters\": {\"algorithm\": \"SHA-256\", \"cost\": 1, \"expiresAt\": 1786822860, \"keyLength\": 32, \"keyPrefix\": \"a1c702ef86b17beb2d42da3414f7d510\", \"nonce\": \"5ec15bb739901fc747d4e9f67016d331\", \"salt\": \"7dd0c7e5da21a4d5ebd7e5d2e1072547\"}, \"signature\": \"8b1a2c0efbd8df3abdb178f3ea81e6b94b515e8291b9ff730c3e08bff0228e8e\"}",
+        "base64": false,
+        "size": 312,
+        "sha256": "76669da555eb83d1d6060234fda8e3fedc66dda3bf7d7c985e11cb840b027b9f"
+      },
+      "remote_address": "127.0.0.1",
+      "protocol": "http/1.0",
+      "initiator": "script",
+      "initiator_stack": [
+        ":198",
+        "https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:0",
+        "https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:0"
+      ],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.662902,
+      "error": null
+    },
+    {
+      "id": "E3DB100EBBEBD2899DF9160E6BAE935B",
+      "url": "blob:http://localhost:8791/6bc9c0be-e5c6-4d9f-bc5c-e94366acc0dc",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.66816,
+      "error": null
+    },
+    {
+      "id": "1F6F6BF8B869E3A34C0C305AE30C8118",
+      "url": "blob:http://localhost:8791/accac13d-3a2d-44db-8f09-7344ca2cb784",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.6688,
+      "error": null
+    },
+    {
+      "id": "63DA3798DF120B3F96839CCA6727D69E",
+      "url": "blob:http://localhost:8791/35a5918c-1f77-4893-ab60-8ccef8cd52aa",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.669146,
+      "error": null
+    },
+    {
+      "id": "39B8588FF2D721D6B6BD524FA9707E34",
+      "url": "blob:http://localhost:8791/99f6dc89-f619-4e20-a87b-3e0a24ef2ee3",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.66931,
+      "error": null
+    },
+    {
+      "id": "8F934884E393224B8A358F03EA730670",
+      "url": "blob:http://localhost:8791/b880b998-3e28-47df-9277-e4ed72548f91",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.66956,
+      "error": null
+    },
+    {
+      "id": "901FC4BA8CC6F2A5263FA88968A7740C",
+      "url": "blob:http://localhost:8791/8bc03958-9290-49ef-b6ad-5a305b900ca0",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.669872,
+      "error": null
+    },
+    {
+      "id": "A8B2EAF1D24D5FF6DF948113412848D3",
+      "url": "blob:http://localhost:8791/3d00bb7c-fca2-46b2-85a4-2acac3fc94b4",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.670255,
+      "error": null
+    },
+    {
+      "id": "211E57A3E162E3BD90F46272EED3D3BB",
+      "url": "blob:http://localhost:8791/78a8c90c-8f10-45ef-a92d-9c79c457a08e",
+      "method": "GET",
+      "resource_type": "Script",
+      "request_headers": {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "base64": false,
+        "size": 0
+      },
+      "status": null,
+      "response_headers": {},
+      "response_body": {
+        "base64": false,
+        "size": 0
+      },
+      "remote_address": null,
+      "protocol": null,
+      "initiator": "other",
+      "initiator_stack": [],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822260.670552,
+      "error": null
+    },
+    {
+      "id": "38635.13",
+      "url": "http://localhost:8791/verify",
+      "method": "POST",
+      "resource_type": "Fetch",
+      "request_headers": {
+        "accept-language": "en-US,en;q=0.9;q=0.9",
+        "content-type": "application/json",
+        "referer": "http://localhost:8791/",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      },
+      "request_body": {
+        "inline": "{\"payload\":\"eyJjaGFsbGVuZ2UiOnsicGFyYW1ldGVycyI6eyJhbGdvcml0aG0iOiJTSEEtMjU2IiwiY29zdCI6MSwiZXhwaXJlc0F0IjoxNzg2ODIyODYwLCJrZXlMZW5ndGgiOjMyLCJrZXlQcmVmaXgiOiJhMWM3MDJlZjg2YjE3YmViMmQ0MmRhMzQxNGY3ZDUxMCIsIm5vbmNlIjoiNWVjMTViYjczOTkwMWZjNzQ3ZDRlOWY2NzAxNmQzMzEiLCJzYWx0IjoiN2RkMGM3ZTVkYTIxYTRkNWViZDdlNWQyZTEwNzI1NDcifSwic2lnbmF0dXJlIjoiOGIxYTJjMGVmYmQ4ZGYzYWJkYjE3OGYzZWE4MWU2Yjk0YjUxNWU4MjkxYjlmZjczMGMzZTA4YmZmMDIyOGU4ZSJ9LCJzb2x1dGlvbiI6eyJjb3VudGVyIjoyMDUyMDksImRlcml2ZWRLZXkiOiJhMWM3MDJlZjg2YjE3YmViMmQ0MmRhMzQxNGY3ZDUxMDc2Njc3MjUzNGExYjM0ZWYwNWZlNTczMzFmNGNjODQ5IiwidGltZSI6MjU2LjR9fQ==\",\"email\":\"ada@example.com\"}",
+        "base64": false,
+        "size": 620
+      },
+      "status": 200,
+      "response_headers": {
+        "content-length": "52",
+        "content-type": "application/json",
+        "date": "Sat, 15 Aug 2026 19:31:01 GMT",
+        "server": "BaseHTTP/0.6 Python/3.14.6",
+        "x-altcha-config": "{\"maxnumber\": 250000}"
+      },
+      "response_body": {
+        "inline": "{\"verified\": true, \"counter\": 205209, \"took\": 256.4}",
+        "base64": false,
+        "size": 52,
+        "sha256": "2351a700d3ce989cfd2c3418c82402caacd4bc80e955f3aff803b3fc6e24a627"
+      },
+      "remote_address": "127.0.0.1",
+      "protocol": "http/1.0",
+      "initiator": "script",
+      "initiator_stack": [
+        ":198",
+        "http://localhost:8791/:27",
+        "https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:0"
+      ],
+      "sent_cookies": [],
+      "set_cookies": [],
+      "wall_time": 1786822261.164046,
+      "error": null
+    }
+  ],
+  "scripts": [
+    {
+      "url": "https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js",
+      "status": 200,
+      "body": {
+        "file": "bodies/cdn.jsdelivr.net_npm_altcha_3.2.1_dist_main_altcha.min.js.js",
+        "base64": false,
+        "size": 113611,
+        "sha256": "084f80ccaf3240ac03d9ce20a7a6379244223967c0e83e679e70a6d5822c5007"
+      },
+      "served": null,
+      "rewritten": false,
+      "tags": [
+        "Script"
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "url": "http://localhost:8791/",
+      "frame": null,
+      "body": {
+        "file": "bodies/altcha.document.html",
+        "base64": false,
+        "size": 21838,
+        "sha256": "f041384fe4106e050882ad081b14f7413cb4c7a694d2a92130024b4126017d1f"
+      },
+      "title": "altcha lab"
+    }
+  ],
+  "cookies": [],
+  "storage": [],
+  "console": [],
+  "exceptions": [],
+  "probes": {
+    "surface": {
+      "startedAt": 1786822260619,
+      "elapsed": 24999,
+      "installed": {
+        "properties": 29,
+        "methods": 25,
+        "failed": 0
+      },
+      "reads": [
+        {
+          "key": "Navigator.prototype.languages",
+          "count": 3,
+          "first": 35,
+          "last": 47,
+          "samples": [
+            "[array 2]",
+            "[array 2]",
+            "[array 2]"
+          ],
+          "sites": [
+            "at https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:66366"
+          ]
+        },
+        {
+          "key": "Navigator.prototype.userAgent",
+          "count": 1,
+          "first": 32,
+          "last": 32,
+          "samples": [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+          ],
+          "sites": [
+            "at xe (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:4415)"
+          ]
+        },
+        {
+          "key": "Navigator.prototype.hardwareConcurrency",
+          "count": 1,
+          "first": 32,
+          "last": 32,
+          "samples": [
+            "8"
+          ],
+          "sites": [
+            "at window.customElements.customElements.get.customElements.define.ea.auto.type (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:64573)"
+          ]
+        },
+        {
+          "key": "worker count the widget spawns",
+          "count": 1,
+          "first": 33,
+          "last": 33,
+          "samples": [
+            "8"
+          ],
+          "sites": [
+            "at window.customElements.customElements.get.customElements.define.ea.auto.type (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:64573)"
+          ]
+        },
+        {
+          "key": "Navigator.prototype.deviceMemory",
+          "count": 1,
+          "first": 33,
+          "last": 33,
+          "samples": [
+            "16"
+          ],
+          "sites": [
+            "at window.customElements.customElements.get.customElements.define.ea.auto.type (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:64608)"
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "key": "Worker",
+          "count": 8,
+          "first": 47,
+          "last": 51,
+          "samples": [
+            "blob:http://localhost:8791/6bc9c0be-e5c6-4d9f-bc5c-e94366acc0dc",
+            "blob:http://localhost:8791/accac13d-3a2d-44db-8f09-7344ca2cb784",
+            "blob:http://localhost:8791/35a5918c-1f77-4893-ab60-8ccef8cd52aa",
+            "blob:http://localhost:8791/99f6dc89-f619-4e20-a87b-3e0a24ef2ee3"
+          ],
+          "sites": [
+            "at new Ha (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:94180)"
+          ]
+        },
+        {
+          "key": "Performance.prototype.now",
+          "count": 2,
+          "first": 43,
+          "last": 315,
+          "samples": [
+            "",
+            ""
+          ],
+          "sites": [
+            "at Pe (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:74069)",
+            "at Pe (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:75600)"
+          ],
+          "results": [
+            "85.5",
+            "357.80000001192093"
+          ]
+        },
+        {
+          "key": "Document.prototype.createElement",
+          "count": 1,
+          "first": 30,
+          "last": 30,
+          "samples": [
+            "style"
+          ],
+          "sites": [
+            "at https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:94520"
+          ],
+          "results": [
+            "[object HTMLStyleElement]"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "scroll",
+          "at": 33,
+          "site": "at Un (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:27888)"
+        },
+        {
+          "type": "keydown",
+          "at": 37,
+          "site": "at HTMLElement.addEventListener (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:45254)"
+        },
+        {
+          "type": "keydown",
+          "at": 37,
+          "site": "at f (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:32403)"
+        },
+        {
+          "type": "focusin",
+          "at": 38,
+          "site": "at https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:77527"
+        },
+        {
+          "type": "focusin",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61699)"
+        },
+        {
+          "type": "keydown",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61754)"
+        },
+        {
+          "type": "pointerdown",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61815)"
+        },
+        {
+          "type": "pointermove",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61880)"
+        },
+        {
+          "type": "scroll",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61941)"
+        },
+        {
+          "type": "touchmove",
+          "at": 38,
+          "site": "at Ta.attach (https://cdn.jsdelivr.net/npm/altcha@3.2.1/dist/main/altcha.min.js:1:61996)"
+        }
+      ],
+      "network": [
+        {
+          "via": "fetch",
+          "url": "/altcha/challenge",
+          "method": "GET",
+          "body": null,
+          "at": 43
+        },
+        {
+          "via": "fetch",
+          "url": "/verify",
+          "method": "POST",
+          "body": "{\"payload\":\"eyJjaGFsbGVuZ2UiOnsicGFyYW1ldGVycyI6eyJhbGdvcml0aG0iOiJTSEEtMjU2IiwiY29zdCI6MSwiZXhwaXJlc0F0IjoxNzg2ODIyODYwLCJrZXlMZW5ndGgiOjMyLCJrZXlQcmVmaXgiOiJhMWM3MDJlZjg2YjE3YmViMmQ0MmRhMzQxNGY3ZDUx…",
+          "at": 544
+        }
+      ],
+      "notes": []
+    }
+  },
+  "notes": {
+    "emulation-failures": [
+      "Emulation.setTouchEmulationEnabled"
+    ]
+  }
+}

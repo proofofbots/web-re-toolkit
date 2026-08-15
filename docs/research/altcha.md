@@ -118,6 +118,47 @@ What the server does with this is not in the repo, so the scoring side is unknow
 
 Sentinel returns a payload whose `verificationData` is a URL encoded query string (`verified`, `score`, `classification`, `expire`, `fields`, `fieldsHash`, ...). The signature is `HMAC(secret, SHA-256(verificationData))`, an HMAC over the digest bytes rather than over the string. `fieldsHash` binds named form fields to the verdict: the values are joined with newlines in the order `fields` lists them and hashed. Verification treats `verified !== true` in either the payload or the parsed data as an invalid solution.
 
+## A capture pass
+
+The source reading above is what an open target allows. The same pass run blind, against the shipped artifact only, is in `reference/altcha/lab/`: a page that loads `altcha@3.2.1/dist/main/altcha.min.js` from jsDelivr and a Python server that issues signed challenges and verifies the answer, both about a hundred lines. Run it and record:
+
+```bash
+python3 reference/altcha/lab/server.py &
+wre capture --target altcha --url http://localhost:8791/ --scripts --wait 25
+wre pin altcha-3.2.1-lab
+wre show captures/altcha-3.2.1-lab
+```
+
+`captures/altcha-3.2.1-lab` is the recorded run: 12 requests (the document, the 113 KB bundle, `GET /altcha/challenge`, eight blob worker URLs, `POST /verify`), the bundle body, and the probe records.
+
+**Two builds ship, and only one is a drop-in.** `dist/main/altcha.min.js` registers `SHA-*` and `PBKDF2/*` and inlines their workers. `dist/external/altcha.min.js` registers nothing: point a page at it and the widget fetches the challenge, then fails with `Unsupported algorithm SHA-256`. Argon2id and scrypt are never registered by either and have to come from `dist/workers/`.
+
+**The attribute was renamed.** v3 takes `challenge="<url or json>"`; the v1 and v2 `challengeurl` is silently ignored, and the widget then fetches the page URL itself and reports an invalid content type. Both spellings are in the manifest's discovery patterns because both are deployed.
+
+**The probe shows what the widget actually touches.** Over a full run it read `navigator.languages`, `navigator.userAgent`, `navigator.hardwareConcurrency` and `navigator.deviceMemory`, called `new Worker` eight times, `performance.now` twice and `createElement` once, and attached the interaction listeners. No canvas, audio, WebGL or font probing. The payload carries no environment facts, which is what the manifest's knobs confirm rather than discover: only `solution.time` moves when the core count changes.
+
+**Deobfuscation is not the point, but it is free.** `wre deobf --target altcha --rename` converges in 4 sweeps and renames 19,944 identifiers; `wre surface` on the result names the two functions that matter by the surface they reach, `onverify` (the one that calls `btoa`) and `onfetchchallenge`. More useful than either: the inlined workers sit in the bundle as string literals of unminified source, comments included, so `solveChallenge`, `PasswordBuffer` and both `deriveKey` implementations are readable in the shipped file.
+
+**The primitives mount.** The worker files are IIFEs, so the manifest strips the wrapper with two patches and stubs `self` in the prelude, after which the roles capture and can be called:
+
+```bash
+wre mount artifacts/altcha/worker-pbkdf2.js --target altcha
+wre mount artifacts/altcha/worker-sha.js --target altcha --role bufferToHex --args '[[1,2,255]]'
+```
+
+That returns `"0102ff"` from the target's own code. `deriveKey` captures but cannot run: the realm has no WebCrypto, which is the reason the client ports the derivations instead of borrowing them.
+
+**The payload round trips.** `wre wire open artifacts/altcha/payload.b64 --codec base64` prints the decoded form value and `wre wire roundtrip` reports `opened true, resealed true, identical true`.
+
+**Real numbers from the recorded run.** The challenge was `SHA-256`, cost 1, and the answer was counter 205209. Chrome with eight inlined workers reported `solution.time` of 256.4 ms, about 800,000 candidates per second across all of them. The same challenge space costs the Rust solver about 33,000,000 per second on the same machine, so roughly 40x, and `clients/altcha/tests/lab.rs` solves a live challenge from the lab server and gets `verified: true` back in about 20 ms:
+
+```bash
+python3 reference/altcha/lab/server.py &
+cargo test -p wre-client-altcha --test lab -- --ignored
+```
+
+Two toolkit bugs surfaced during the pass and are fixed in this commit: the Chrome version probe read the DevTools HTTP response until EOF, which never comes on Chrome 151 because it keeps the connection open, and `wre mount` matched signatures against the source before applying the manifest's patches, so a target that needs unwrapping could never match one.
+
 ## The playground
 
 `playground.altcha.org` is a static SPA. It creates challenges in the page with the hard coded secret `signature.secret` and verifies them locally, so it exercises the widget and the algorithm switch, not a server. Useful for reading behaviour, useless as a live target.
@@ -128,6 +169,7 @@ Sentinel returns a payload whose `verificationData` is a URL encoded query strin
 - `clients/altcha` is the headless client. It ports the four derivations to Rust rather than mounting the widget in V8, because the shipped code is an unobfuscated wrapper around WebCrypto and hash-wasm, and because a mounted realm has no WebCrypto to wrap.
 - `conformance/altcha.json` runs 13 cases through the sidecar, including both challenge formats, the obfuscation round trip and the server signature.
 - `reference/altcha/vectors.json` holds the values the widget's own code produced, and `reference/altcha/vectors.test.ts` regenerates them: drop it into `tests/` of a clone of `altcha-org/altcha` and run `npx vitest run tests/vectors.test.ts`.
+- `reference/altcha/lab/` is the page and server used for the capture pass, and `captures/altcha-3.2.1-lab` is the recorded run.
 
 `clients/altcha/tests/session.rs` drives the client itself through create, solve and verify for both formats, and checks that a seeded session produces the same interaction samples twice. `clients/altcha/tests/vectors.rs` asserts the Rust port against the widget's own values: the SHA chain including truncation and a cost above 1, both PBKDF2 digests, scrypt, argon2id, the canonical JSON string and its HMAC, a full v3 solve that lands on the counter the server used, the v1 shape and signature, an obfuscation payload that decrypts to its cleartext, and a Sentinel signature with its `fieldsHash`.
 
