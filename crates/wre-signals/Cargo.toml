@@ -1,0 +1,15 @@
+[package]
+name = "wre-signals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Recover permuted output vectors, carry field identity across builds and attribute values to the API that produced them"
+
+[dependencies]
+wre-core.workspace = true
+wre-crypto.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
