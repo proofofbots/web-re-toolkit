@@ -401,10 +401,25 @@ async fn fetch_local(url: &str) -> Result<String> {
         .map_err(|error| Error::msg(error.to_string()))?;
 
     let mut response = Vec::new();
-    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
-        .await
-        .map_err(|_| Error::msg("chrome http read timed out"))?
-        .map_err(|error| Error::msg(error.to_string()))?;
+    let mut chunk = [0u8; 4096];
+
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk))
+            .await
+            .map_err(|_| Error::msg("chrome http read timed out"))?
+            .map_err(|error| Error::msg(error.to_string()))?;
+
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..read]);
+
+        if let Some(length) = complete_body_length(&response) {
+            if length.0 + length.1 <= response.len() {
+                break;
+            }
+        }
+    }
 
     let text = String::from_utf8_lossy(&response).into_owned();
     let body = text
@@ -413,6 +428,20 @@ async fn fetch_local(url: &str) -> Result<String> {
         .unwrap_or(text);
 
     Ok(body)
+}
+
+fn complete_body_length(response: &[u8]) -> Option<(usize, usize)> {
+    let text = String::from_utf8_lossy(response);
+    let (head, _) = text.split_once("\r\n\r\n")?;
+    let start = head.len() + 4;
+
+    let length = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())?;
+
+    Some((start, length))
 }
 
 pub fn profile_dir(root: &Path, port: u16) -> PathBuf {

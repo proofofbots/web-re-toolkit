@@ -166,17 +166,17 @@ impl Mount {
 }
 
 pub fn mount(source: &str, plan: &MountPlan, options: RealmOptions) -> Result<Mount> {
+    let (patched, applied) = apply_patches(source, &plan.patches)?;
+
     let detected = if plan.signatures.is_empty() {
         BTreeMap::new()
     } else {
-        let roles = detect_roles(source, plan.source_kind, &plan.signatures)?;
+        let roles = detect_roles(&patched, plan.source_kind, &plan.signatures)?;
         if !roles.unmatched.is_empty() {
             tracing::debug!("signatures without a match: {:?}", roles.unmatched);
         }
         roles.roles
     };
-
-    let (patched, applied) = apply_patches(source, &plan.patches)?;
 
     let prepared = if detected.is_empty() {
         patched
