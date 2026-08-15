@@ -1,0 +1,102 @@
+name = "example"
+description = "a worked adapter showing every section the toolkit reads"
+urls = ["https://demo.example.test/"]
+
+[pages]
+login = "https://demo.example.test/login"
+
+[discovery]
+script_patterns = ['src="([^"]*/collect\.js[^"]*)"']
+endpoint_patterns = ['/v\d+/collect']
+cookie_names = ["_session"]
+header_names = ["x-signature"]
+document_markers = ["window.__collector"]
+
+[deobfuscate]
+source_kind = "script"
+max_sweeps = 8
+rename = true
+infer_names = true
+remove_unused = true
+inline_global_aliases = true
+aggressive_member_access = false
+drop_debugger = false
+hash_functions = ["findName"]
+disabled_passes = []
+
+[[deobfuscate.member_reads]]
+function = "readVaultedProp"
+object_arg = 0
+key_arg = 1
+
+[live]
+tolerate_throw = true
+clock_ms = 1700000000000.0
+random_seed = 1
+
+[[live.signatures]]
+role = "hash"
+pattern = "0x811c9dc5|2166136261"
+params = 1
+
+[[live.signatures]]
+role = "seal"
+pattern = "\\^\\s*\\w+\\[\\s*\\w+\\s*%\\s*\\w+\\s*\\]"
+
+[[live.signatures]]
+role = "encodeJson"
+pattern = "\"Recursive input\""
+
+[live.exports]
+codec = "globalThis.__internals && __internals.codec"
+
+[wire]
+codec = "base64-json"
+request_patterns = ['/v\d+/collect']
+
+[wire.field_labels]
+"s17" = "canvas rendering"
+"s2" = "screen geometry"
+
+[probe]
+preset = "fingerprint"
+network = true
+workers = true
+
+[[probe.methods]]
+holder = "OfflineAudioContext.prototype"
+method = "startRendering"
+label = "audio fingerprint"
+
+[[knobs]]
+name = "timezone-berlin"
+group = "locale"
+note = "moves anything derived from the local clock offset"
+
+[[knobs.emulation]]
+method = "Emulation.setTimezoneOverride"
+params = { timezoneId = "Europe/Berlin" }
+
+[[knobs]]
+name = "screen-1920x1080"
+group = "screen"
+
+[[knobs.emulation]]
+method = "Emulation.setDeviceMetricsOverride"
+params = { width = 1920, height = 945, deviceScaleFactor = 2.0, mobile = false, screenWidth = 1920, screenHeight = 1080 }
+
+[[knobs]]
+name = "webdriver-true"
+group = "automation"
+note = "plants the automation flag to find the slot that carries the verdict"
+inject = "Object.defineProperty(Navigator.prototype, 'webdriver', { get: function () { return true; }, configurable: true });"
+
+[[checks]]
+name = "payload round trips"
+kind = "roundtrip"
+note = "every captured body decodes and re-encodes byte for byte"
+
+[[checks]]
+name = "primitives mount"
+kind = "mount"
+note = "every declared role is found in the pinned build"

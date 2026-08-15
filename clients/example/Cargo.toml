@@ -1,0 +1,19 @@
+[package]
+name = "wre-client-example"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Worked headless client: mounts a shipped script in a V8 realm and seals payloads with its own primitives"
+
+[dependencies]
+wre-client.workspace = true
+wre-core.workspace = true
+wre-js.workspace = true
+wre-live.workspace = true
+
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

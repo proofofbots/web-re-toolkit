@@ -1,0 +1,161 @@
+{
+  "target": "example",
+  "config": {
+    "key": "example",
+    "clock_ms": 1700000000000,
+    "seed": 7,
+    "expect_build": "example-3.1.0"
+  },
+  "diag": {
+    "mode": "on_error"
+  },
+  "cases": [
+    {
+      "name": "the build tag matches the pinned one",
+      "op": "build",
+      "params": {},
+      "expect": {
+        "build": "example-3.1.0"
+      }
+    },
+    {
+      "name": "every primitive was captured",
+      "op": "roles",
+      "params": {},
+      "expect": [
+        "encodeJson",
+        "hash",
+        "payload",
+        "seal"
+      ]
+    },
+    {
+      "name": "the target's own hash is stable",
+      "op": "hash",
+      "params": {
+        "text": "abc"
+      },
+      "expect": {
+        "value": 440920331,
+        "hex": "1a47e90b"
+      }
+    },
+    {
+      "name": "the target's own hash handles a longer string",
+      "op": "hash",
+      "params": {
+        "text": "hello"
+      },
+      "expect": {
+        "value": 1335831723,
+        "hex": "4f9f2cab"
+      }
+    },
+    {
+      "name": "the encoder round trips a value",
+      "op": "encode",
+      "params": {
+        "value": {
+          "a": 1,
+          "b": [
+            2,
+            3
+          ]
+        }
+      },
+      "expect": {
+        "text": "{\"a\":1,\"b\":[2,3]}",
+        "bytes": 17
+      }
+    },
+    {
+      "name": "sealing produces a body and a digest",
+      "op": "seal",
+      "params": {
+        "value": {
+          "hello": "world"
+        }
+      },
+      "expect_keys": [
+        "body",
+        "digest",
+        "bytes"
+      ]
+    },
+    {
+      "name": "the payload carries the declared facts",
+      "op": "payload",
+      "params": {
+        "url": "https://demo.example.test/",
+        "title": "demo"
+      },
+      "expect": {
+        "v": 3,
+        "u": "https://demo.example.test/",
+        "t": "demo",
+        "ts": 1700000000000
+      }
+    },
+    {
+      "name": "solve returns a sealed body and headers",
+      "op": "solve",
+      "params": {
+        "url": "https://demo.example.test/",
+        "title": "demo"
+      },
+      "expect": {
+        "digest": "6e119319",
+        "build": "example-3.1.0"
+      },
+      "expect_keys": [
+        "body",
+        "digest",
+        "headers",
+        "build",
+        "took_ms"
+      ]
+    },
+    {
+      "name": "a missing required field is rejected before the client runs",
+      "op": "solve",
+      "params": {
+        "title": "no url here"
+      },
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "an unknown field is rejected rather than dropped",
+      "op": "hash",
+      "params": {
+        "text": "abc",
+        "extra": 1
+      },
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "an op that does not exist is unsupported",
+      "op": "nonesuch",
+      "params": {},
+      "expect_error": "unsupported"
+    },
+    {
+      "name": "a stall that fits the deadline returns",
+      "op": "stall",
+      "params": {
+        "ms": 40
+      },
+      "expect_keys": [
+        "slept_ms"
+      ]
+    },
+    {
+      "name": "a deadline stops a stalled call",
+      "op": "stall",
+      "params": {
+        "ms": 4000
+      },
+      "deadline_ms": 300,
+      "expect_error": "timeout"
+    }
+  ]
+}
