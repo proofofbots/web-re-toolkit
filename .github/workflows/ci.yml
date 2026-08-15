@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Test the workspace
+        run: cargo test --workspace
+
+      - name: Check the go runtime
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l packages/go/wre)"
+          cd packages/go/wre && go vet ./...
+
+      - name: Check the node runtime parses
+        run: |
+          set -euo pipefail
+          for file in packages/node/runtime/index.js packages/node/runtime/src/*.js packages/node/conformance/run.js; do
+            node --check "$file"
+          done
+
+      - name: Check the python runtime compiles
+        run: python -m compileall -q packages/python/wre_runtime packages/python/conformance
+
+      - name: Conformance through every binding
+        run: bash scripts/client-smoke.sh

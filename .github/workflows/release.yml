@@ -1,0 +1,367 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without the leading v
+        required: true
+        type: string
+      publish:
+        description: Publish to npm and PyPI instead of only building
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUNDLE: default
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      features: ${{ steps.plan.outputs.features }}
+      publish: ${{ steps.plan.outputs.publish }}
+      projects: ${{ steps.plan.outputs.projects }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT" = "push" ]; then
+            version="${TAG#v}"
+            publish=true
+          else
+            version="$INPUT_VERSION"
+            publish="$INPUT_PUBLISH"
+          fi
+
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "version $version is not a semantic version" >&2
+            exit 1
+          fi
+
+          targets="$(sed -n 's/^targets = \[\(.*\)\]/\1/p' clients.toml | head -1 | tr -d '" ')"
+
+          if [ -z "$targets" ]; then
+            echo "clients.toml declares no targets for the default bundle" >&2
+            exit 1
+          fi
+
+          features="$(printf '%s' "$targets" | tr ',' '\n' | sed 's/^/target-/' | paste -sd, -)"
+          projects="$(printf '%s' "runtime,$targets" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "features=$features" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "projects=[$projects]" >> "$GITHUB_OUTPUT"
+
+          echo "version $version, features $features, publish $publish, projects [$projects]"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            sign: true
+            check: true
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            sign: true
+            check: false
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            sign: false
+            check: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            sign: false
+            check: true
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            sign: false
+            check: true
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build wred
+        shell: bash
+        env:
+          WRE_BUNDLE: ${{ env.BUNDLE }}
+          FEATURES: ${{ needs.plan.outputs.features }}
+        run: |
+          cargo build --release -p wre-clientd \
+            --no-default-features --features "$FEATURES" \
+            --target ${{ matrix.target }}
+
+      - name: Sign the binary
+        if: matrix.sign
+        run: codesign --force --sign - target/${{ matrix.target }}/release/wred
+
+      - name: Stage the binary
+        shell: bash
+        run: |
+          mkdir -p staged
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            cp target/${{ matrix.target }}/release/wred.exe staged/wred.exe
+          else
+            cp target/${{ matrix.target }}/release/wred staged/wred
+          fi
+
+      - name: Check that it runs
+        if: matrix.check
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            ./staged/wred.exe --targets
+          else
+            ./staged/wred --targets
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wred-${{ matrix.target }}
+          path: staged/*
+          retention-days: 7
+
+  package:
+    needs: [plan, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: wred-*
+
+      - name: Stage every binary
+        run: |
+          set -euo pipefail
+          for dir in incoming/wred-*; do
+            triple="${dir#incoming/wred-}"
+            mkdir -p "dist/$BUNDLE/bin/$triple"
+            cp "$dir"/* "dist/$BUNDLE/bin/$triple/"
+            chmod +x "dist/$BUNDLE/bin/$triple/"*
+          done
+          find "dist/$BUNDLE/bin" -type f -exec sha256sum {} +
+
+      - name: Set the version everywhere
+        run: bash scripts/set-version.sh "${{ needs.plan.outputs.version }}"
+
+      - name: Build the cli
+        run: cargo build --release -p wre-cli
+
+      - name: Conformance against the release binary
+        run: |
+          ./target/release/wre client test \
+            --bin "dist/$BUNDLE/bin/x86_64-unknown-linux-gnu/wred" \
+            --lang all
+
+      - name: Generate the packages
+        run: |
+          ./target/release/wre client package \
+            --bundle "$BUNDLE" \
+            --version "${{ needs.plan.outputs.version }}" \
+            --bin "dist/$BUNDLE/bin/x86_64-unknown-linux-gnu/wred"
+
+      - name: Collect the release tree
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp -R "dist/$BUNDLE/packages/." release/
+          mkdir -p release/node/runtime release/python/runtime
+          cp -R packages/node/runtime/. release/node/runtime/
+          cp -R packages/python/. release/python/runtime/
+          rm -rf release/python/runtime/conformance
+          find release -name "__pycache__" -type d -exec rm -rf {} +
+          find release -name "wred" -exec chmod +x {} +
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release
+          retention-days: 7
+
+  assets:
+    needs: [plan, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: wred-*
+
+      - name: Name the assets by triple
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          for dir in incoming/wred-*; do
+            triple="${dir#incoming/wred-}"
+            if [ -f "$dir/wred.exe" ]; then
+              cp "$dir/wred.exe" "assets/wred-$triple"
+            else
+              cp "$dir/wred" "assets/wred-$triple"
+            fi
+          done
+          (cd assets && sha256sum * > SHA256SUMS)
+          ls -l assets
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" assets/* --clobber
+
+  npm:
+    needs: [plan, package]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-22.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Use an npm that speaks OIDC
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Restore the executable bit
+        run: find release -name "wred" -exec chmod +x {} +
+
+      - name: Publish the runtime
+        run: npm publish --access public release/node/runtime
+
+      - name: Publish the platform packages
+        run: |
+          set -euo pipefail
+          for dir in release/node/*/platform/*/; do
+            echo "publishing $dir"
+            npm publish --access public "$dir"
+          done
+
+      - name: Publish the client packages
+        run: |
+          set -euo pipefail
+          for dir in release/node/*/; do
+            if [ "$dir" = "release/node/runtime/" ]; then
+              continue
+            fi
+            echo "publishing $dir"
+            npm publish --access public "$dir"
+          done
+
+  pypi:
+    needs: [plan, package]
+    if: needs.plan.outputs.publish == 'true'
+    strategy:
+      max-parallel: 1
+      matrix:
+        project: ${{ fromJson(needs.plan.outputs.projects) }}
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the build frontend
+        run: python -m pip install --quiet build
+
+      - name: Restore the executable bit
+        run: find release -name "wred" -exec chmod +x {} +
+
+      - name: Build the distributions
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/wheels"
+
+          if [ "$PROJECT" = "runtime" ]; then
+            python -m build --outdir "$GITHUB_WORKSPACE/wheels" release/python/runtime
+          else
+            bash "release/python/$PROJECT/build_wheels.sh"
+            cp "release/python/$PROJECT/dist/"*.whl "$GITHUB_WORKSPACE/wheels/"
+          fi
+
+          ls -l "$GITHUB_WORKSPACE/wheels"
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels
