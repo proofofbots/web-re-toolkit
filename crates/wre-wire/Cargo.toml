@@ -1,0 +1,22 @@
+[package]
+name = "wre-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Addressable payload workbench: codecs, diffing, forging, schema inference and round-trip verification"
+
+[dependencies]
+wre-core.workspace = true
+wre-live.workspace = true
+
+anyhow.workspace = true
+base64.workspace = true
+flate2.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
