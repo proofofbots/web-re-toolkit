@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use wre_core::error::{Error, Result};
+use wre_net::emulate::Fingerprint;
 use wre_net::http::{Client, ClientOptions};
 use wre_net::proxy::ProxySpec;
 use wre_report::table::Table;
@@ -151,6 +152,7 @@ pub async fn discover(
     url: &str,
     target: Option<String>,
     proxy: Option<String>,
+    fingerprint: Option<String>,
 ) -> Result<()> {
     let manifest = match &target {
         Some(name) => Some(load(context, name)?),
@@ -162,7 +164,12 @@ pub async fn discover(
         None => ProxySpec::from_env(),
     };
 
-    let client = Client::new(ClientOptions { proxy, ..ClientOptions::default() })?;
+    let fingerprint = match fingerprint {
+        Some(spec) => Some(spec.parse::<Fingerprint>()?),
+        None => None,
+    };
+
+    let client = Client::new(ClientOptions { proxy, fingerprint, ..ClientOptions::default() })?;
     let response = client
         .fetch(wre_net::http::FetchRequest::get(url))
         .await?;
@@ -189,6 +196,8 @@ pub async fn discover(
         "url": response.url,
         "status": response.status,
         "protocol": response.version,
+        "client": client.fingerprint().to_string(),
+        "user_agent": client.user_agent(),
         "bytes": response.body.len(),
         "scripts": scripts,
         "markers": markers,
@@ -196,11 +205,12 @@ pub async fn discover(
     });
 
     let mut plain = format!(
-        "{} {} ({} bytes over {})\n",
+        "{} {} ({} bytes over {} as {})\n",
         response.status,
         response.url,
         response.body.len(),
-        response.version
+        response.version,
+        client.fingerprint()
     );
 
     if !scripts.is_empty() {

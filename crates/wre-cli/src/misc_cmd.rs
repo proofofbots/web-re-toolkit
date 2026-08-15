@@ -10,7 +10,8 @@ use wre_net::tls::ClientHello;
 use wre_report::acceptance::Acceptance;
 use wre_report::baseline::{Baseline, diff_maps, render_diff};
 use wre_report::table::Table;
-use wre_variants::markers::automation_markers;
+use wre_variants::grouping::Design;
+use wre_variants::markers::{Kind, automation_markers};
 use wre_variants::sweep::{self as sweep_engine, Knob, SweepOptions, render_arms, render_signal_map};
 use wre_wire::codec::{Codec, JsonCodec, verify_roundtrip};
 
@@ -99,19 +100,78 @@ pub fn baseline(context: &Context, name: &str, map: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn markers(context: &Context) -> Result<()> {
-    let markers = automation_markers();
+pub fn markers(context: &Context, kind: Option<String>, group: Option<String>) -> Result<()> {
+    let wanted = match kind.as_deref() {
+        None => None,
+        Some("presence") => Some(Kind::Presence),
+        Some("concealment") => Some(Kind::Concealment),
+        Some(other) => {
+            return Err(Error::msg(format!(
+                "unknown marker kind {other}, pick presence or concealment"
+            )));
+        }
+    };
 
-    let mut table = Table::new(&["marker", "group", "what it plants"]);
+    let markers: Vec<_> = automation_markers()
+        .into_iter()
+        .filter(|marker| wanted.is_none_or(|kind| marker.kind == kind))
+        .filter(|marker| group.as_ref().is_none_or(|group| &marker.group == group))
+        .collect();
+
+    if markers.is_empty() {
+        return Err(Error::msg("no marker matches that filter"));
+    }
+
+    let mut table = Table::new(&["marker", "group", "kind", "what it plants"]);
     for marker in &markers {
         table.push(vec![
             marker.name.clone(),
             marker.group.clone(),
+            match marker.kind {
+                Kind::Presence => "presence".to_string(),
+                Kind::Concealment => "concealment".to_string(),
+            },
             marker.note.clone(),
         ]);
     }
 
     context.emit(&json!(markers), &table.render());
+    Ok(())
+}
+
+pub fn pools(context: &Context, group: Option<String>, one_at_a_time: bool) -> Result<()> {
+    let names: Vec<String> = automation_markers()
+        .into_iter()
+        .filter(|marker| group.as_ref().is_none_or(|group| &marker.group == group))
+        .map(|marker| marker.name)
+        .collect();
+
+    if names.is_empty() {
+        return Err(Error::msg("no marker matches that filter"));
+    }
+
+    let design = if one_at_a_time {
+        Design::one_at_a_time(&names)?
+    } else {
+        Design::binary(&names)?
+    };
+
+    let mut plain = format!(
+        "{} markers attributed in {} runs\n\n",
+        design.markers.len(),
+        design.runs()
+    );
+
+    for (index, pool) in design.pools.iter().enumerate() {
+        plain.push_str(&format!("run {index}: plant {}\n", pool.join(", ")));
+    }
+
+    plain.push_str(
+        "\nplant each pool together, diff the payload against the baseline, then confirm \
+         whatever the pools blame by planting it on its own\n",
+    );
+
+    context.emit(&json!(design), &plain);
     Ok(())
 }
 

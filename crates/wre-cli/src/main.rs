@@ -2,8 +2,10 @@ mod args;
 mod capture_cmd;
 mod client_cmd;
 mod env_cmd;
+mod ident_cmd;
 mod js_cmd;
 mod misc_cmd;
+mod sandbox_cmd;
 mod target_cmd;
 mod vm_cmd;
 mod wire_cmd;
@@ -68,8 +70,8 @@ async fn run(context: &Context, command: Command) -> Result<()> {
         Command::Init { name, url, force } => target_cmd::init(context, &name, url, force),
         Command::Targets => target_cmd::list(context),
         Command::Check { target } => target_cmd::check(context, &target),
-        Command::Discover { url, target, proxy } => {
-            target_cmd::discover(context, &url, target, proxy).await
+        Command::Discover { url, target, proxy, fingerprint } => {
+            target_cmd::discover(context, &url, target, proxy, fingerprint).await
         }
 
         Command::Browser { port, status, stop, start, headless } => {
@@ -157,7 +159,25 @@ async fn run(context: &Context, command: Command) -> Result<()> {
         Command::Sweep { baseline, arm, pointer } => {
             misc_cmd::sweep(context, &baseline, &arm, pointer)
         }
-        Command::Markers => misc_cmd::markers(context),
+        Command::Sandbox(command) => sandbox_cmd::run(context, command),
+        Command::Markers { kind, group } => misc_cmd::markers(context, kind, group),
+
+        Command::Locate { input, target, module, lock } => {
+            ident_cmd::locate(context, &input, &target, module, lock)
+        }
+        Command::Drift { lock, input, module } => ident_cmd::drift(context, &lock, &input, module),
+        Command::Builds { before, after, module, threshold } => {
+            ident_cmd::builds(context, &before, &after, module, threshold)
+        }
+        Command::Integrity { input, target, resign, out } => {
+            ident_cmd::integrity(context, &input, &target, resign, out)
+        }
+        Command::Equivalent { original, rewritten, module } => {
+            ident_cmd::equivalent(context, &original, &rewritten, module)
+        }
+        Command::Grade { built, real } => ident_cmd::grade(context, &real, &built),
+        Command::Align { before, after } => ident_cmd::align(context, &before, &after),
+        Command::Pools { group, one_at_a_time } => misc_cmd::pools(context, group, one_at_a_time),
         Command::Verify { target, capture } => misc_cmd::verify(context, target, capture),
     }
 }

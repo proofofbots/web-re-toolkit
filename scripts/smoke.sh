@@ -160,6 +160,112 @@ frames += frame(0x1, 0x5, 1, bytes([0x82, 0x87, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0x
 PY
 "$wre" tls h2 "$work/h2.bin"
 
+step "locate roles by structure, then follow them into a rebuild"
+cat > "$work/build-a.js" <<'JS'
+/* guard:0 */
+function hashText(input) {
+  var acc = 2166136261;
+  for (var i = 0; i < input.length; i++) {
+    acc ^= input.charCodeAt(i);
+    acc = acc * 16777619;
+  }
+  return acc >>> 0;
+}
+function toHex(bytes) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+function sealPayload(body) {
+  return hashText(body) + ":" + body.length;
+}
+JS
+cat > "$work/build-b.js" <<'JS'
+/* guard:0 */
+function Qz(a) {
+  var b = 2166136261;
+  for (var c = 0; c < a.length; c++) {
+    b ^= a.charCodeAt(c);
+    b = b * 16777619;
+  }
+  return b >>> 0;
+}
+function Xy(d) {
+  var e = "";
+  for (var f = 0; f < d.length; f++) {
+    e += d[f].toString(16).padStart(2, "0").toUpperCase();
+  }
+  return e;
+}
+function Wv(g) {
+  return Qz(g) + ":" + g.length;
+}
+function freshOne(h, i) {
+  return h + i;
+}
+JS
+
+cat >> "$work/targets/demo.toml" <<'TOML'
+
+[[locate]]
+role = "to-hex"
+
+[[locate.clues]]
+kind = "properties"
+all = ["toString", "padStart"]
+weight = 3.0
+required = true
+
+[[locate]]
+role = "seal"
+
+[[locate.clues]]
+kind = "calls"
+role = "hash"
+weight = 3.0
+required = true
+
+[integrity]
+marker = "/\\* guard:(\\d+) \\*/"
+checksum = "murmur3"
+seed = 35549
+skip_whitespace = true
+scope = "after-marker"
+TOML
+
+"$wre" --root "$work" locate "$work/build-a.js" --target demo --lock "$work/demo.lock"
+"$wre" --root "$work" drift "$work/demo.lock" "$work/build-b.js"
+"$wre" builds "$work/build-a.js" "$work/build-b.js"
+
+step "verify and restore a script's hash of its own source"
+"$wre" --root "$work" integrity "$work/build-a.js" --target demo --resign
+"$wre" --root "$work" integrity "$work/build-a.js" --target demo
+
+step "check a rewrite reaches for nothing new"
+printf 'var alias = atob;\nfunction decode(t) { return alias(t).length; }\n' > "$work/before.js"
+printf 'function decode(t) { return atob(t).length; }\n' > "$work/after.js"
+"$wre" equivalent "$work/before.js" "$work/after.js"
+
+step "grade a built payload against real ones"
+printf '{"ua":"Chrome/140","cores":10,"elapsed":42}\n' > "$work/real-1.json"
+printf '{"ua":"Chrome/140","cores":10,"elapsed":57}\n' > "$work/real-2.json"
+printf '{"ua":"Chrome/140","cores":10,"elapsed":49}\n' > "$work/built.json"
+"$wre" grade "$work/built.json" --real "$work/real-1.json" "$work/real-2.json"
+
+step "align slots across two builds"
+printf '[10,20,30,40]\n' > "$work/slots-a.json"
+printf '[30,10,40,20]\n' > "$work/slots-b.json"
+"$wre" align --before "$work/slots-a.json" --after "$work/slots-b.json"
+
+step "the browser surface looks like a browser"
+"$wre" sandbox check --all
+"$wre" sandbox list
+
+step "plan the pooled runs that attribute every marker"
+"$wre" pools | head -3
+
 step "acceptance"
 "$wre" --root "$work" verify --target demo
 

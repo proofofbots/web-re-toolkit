@@ -13,6 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 wre-core.workspace = true
+wre-crypto.workspace = true
+wre-pack.workspace = true
+wre-pow.workspace = true
+wre-behavior.workspace = true
+wre-sandbox.workspace = true
+wre-signals.workspace = true
+wre-oracle.workspace = true
+wre-ident.workspace = true
 wre-net.workspace = true
 wre-cdp.workspace = true
 wre-capture.workspace = true

@@ -49,6 +49,8 @@ pub enum Command {
         target: Option<String>,
         #[arg(long)]
         proxy: Option<String>,
+        #[arg(long, help = "Client to emulate, as profile[:platform], for example chrome_141:windows")]
+        fingerprint: Option<String>,
     },
 
     #[command(about = "Manage the shared Chrome instance")]
@@ -176,6 +178,9 @@ pub enum Command {
     #[command(subcommand, about = "Environment snapshots and realms")]
     Env(EnvCommand),
 
+    #[command(subcommand, about = "The browser surface a realm presents to a target")]
+    Sandbox(SandboxCommand),
+
     #[command(subcommand, about = "Transport fingerprints")]
     Tls(TlsCommand),
 
@@ -203,8 +208,84 @@ pub enum Command {
         pointer: Option<String>,
     },
 
+    #[command(about = "Find the target's roles by structure and behaviour rather than by name")]
+    Locate {
+        input: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, help = "parse as an es module rather than a classic script")]
+        module: bool,
+        #[arg(long, help = "write the resolved bindings to a lock file")]
+        lock: Option<PathBuf>,
+    },
+
+    #[command(about = "Report which locked roles moved in a newer build")]
+    Drift {
+        lock: PathBuf,
+        input: PathBuf,
+        #[arg(long)]
+        module: bool,
+    },
+
+    #[command(about = "Pair the functions of two builds and say what changed")]
+    Builds {
+        before: PathBuf,
+        after: PathBuf,
+        #[arg(long)]
+        module: bool,
+        #[arg(long, default_value = "0.5", help = "least shared structure to call two functions a pair")]
+        threshold: f64,
+    },
+
+    #[command(about = "Check, or restore, a script's hash of its own source")]
+    Integrity {
+        input: PathBuf,
+        #[arg(long)]
+        target: String,
+        #[arg(long, help = "rewrite the stored hash to match the current bytes")]
+        resign: bool,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    #[command(about = "Check that a rewrite reaches for nothing the original did not")]
+    Equivalent {
+        original: PathBuf,
+        rewritten: PathBuf,
+        #[arg(long)]
+        module: bool,
+    },
+
+    #[command(about = "Grade a built payload against several real ones")]
+    Grade {
+        built: PathBuf,
+        #[arg(long = "real", required = true, num_args = 2.., help = "two or more real payloads")]
+        real: Vec<PathBuf>,
+    },
+
+    #[command(about = "Align the slots of one build against another by value")]
+    Align {
+        #[arg(long = "before", required = true, num_args = 1..)]
+        before: Vec<PathBuf>,
+        #[arg(long = "after", required = true, num_args = 1..)]
+        after: Vec<PathBuf>,
+    },
+
+    #[command(about = "Plan the pooled runs that attribute many markers in few loads")]
+    Pools {
+        #[arg(long, help = "restrict to one marker group")]
+        group: Option<String>,
+        #[arg(long, help = "one run per marker instead of a pooled design")]
+        one_at_a_time: bool,
+    },
+
     #[command(about = "List the built in automation markers")]
-    Markers,
+    Markers {
+        #[arg(long, help = "only the tells a tool leaves, or only the tells hiding one leaves")]
+        kind: Option<String>,
+        #[arg(long)]
+        group: Option<String>,
+    },
 
     #[command(about = "Run every check that needs no browser")]
     Verify {
@@ -351,6 +432,55 @@ pub enum EnvCommand {
         expression: Option<String>,
         #[arg(long, default_value_t = 30)]
         timeout: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SandboxCommand {
+    #[command(about = "List the captured fingerprint profiles in the workspace")]
+    List,
+
+    #[command(about = "Print the browser surface that would be installed")]
+    Profile {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, conflicts_with = "profile")]
+        random: bool,
+    },
+
+    #[command(about = "Mount the surface and check it looks like a real browser")]
+    Check {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long, conflicts_with = "profile")]
+        random: bool,
+        #[arg(long, conflicts_with_all = ["profile", "target", "random"])]
+        all: bool,
+    },
+
+    #[command(about = "Serve the capture page and store the profile the browser sends back")]
+    Capture {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8099)]
+        port: u16,
+        #[arg(long)]
+        keep: bool,
+        #[arg(long)]
+        force: bool,
+    },
+
+    #[command(about = "Store a profile captured with the page's download button")]
+    Import {
+        input: PathBuf,
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
