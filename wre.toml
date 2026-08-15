@@ -1,0 +1,9 @@
+[workspace]
+name = "web-re-toolkit"
+
+[layout]
+artifacts = "artifacts"
+captures = "captures"
+reference = "reference"
+targets = "targets"
+profiles = "profiles"

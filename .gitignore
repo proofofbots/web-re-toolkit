@@ -1,0 +1,8 @@
+target/
+artifacts/
+dist/
+node_modules/
+__pycache__/
+*.clean.js
+*.diag.json
+.DS_Store
