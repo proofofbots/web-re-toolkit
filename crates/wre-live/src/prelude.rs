@@ -1,48 +1,48 @@
-pub const RUNTIME: &str = r#"
+pub fn core(timers: bool) -> String {
+    CORE_TEMPLATE.replace("__WRE_TIMERS__", if timers { "true" } else { "false" })
+}
+
+const CORE_TEMPLATE: &str = r#"
 (function () {
+  var withTimers = __WRE_TIMERS__;
+  var limit = 4096;
   var records = { console: [], access: [], errors: [], calls: [] };
-  Object.defineProperty(globalThis, "__wre", {
-    value: {
-      records: records,
-      limit: 4096,
-      push: function (bucket, entry) {
-        var list = records[bucket];
-        if (!list) { list = records[bucket] = []; }
-        if (list.length < this.limit) { list.push(entry); }
-      },
-      drain: function () {
-        var out = records;
-        records = { console: [], access: [], errors: [], calls: [] };
-        return out;
-      },
-      describe: function (value) {
-        try {
-          if (value === null) return "null";
-          var kind = typeof value;
-          if (kind === "string") return value.length > 200 ? value.slice(0, 200) + "…" : value;
-          if (kind === "function") return "[function " + (value.name || "anonymous") + "]";
-          if (kind === "object") {
-            if (Array.isArray(value)) return "[array " + value.length + "]";
-            return "[object " + Object.prototype.toString.call(value).slice(8, -1) + "]";
-          }
-          return String(value);
-        } catch (error) {
-          return "[unreadable]";
-        }
+
+  function push(bucket, entry) {
+    var list = records[bucket];
+    if (!list) { list = records[bucket] = []; }
+    if (list.length < limit) { list.push(entry); }
+  }
+
+  function drain() {
+    var out = records;
+    records = { console: [], access: [], errors: [], calls: [] };
+    return out;
+  }
+
+  function describe(value) {
+    try {
+      if (value === null) return "null";
+      var kind = typeof value;
+      if (kind === "string") return value.length > 200 ? value.slice(0, 200) + "…" : value;
+      if (kind === "function") return "[function " + (value.name || "anonymous") + "]";
+      if (kind === "object") {
+        if (Array.isArray(value)) return "[array " + value.length + "]";
+        return "[object " + Object.prototype.toString.call(value).slice(8, -1) + "]";
       }
-    },
-    enumerable: false,
-    configurable: false,
-    writable: false
-  });
+      return String(value);
+    } catch (error) {
+      return "[unreadable]";
+    }
+  }
 
   var levels = ["log", "info", "warn", "error", "debug", "trace"];
   var console = {};
   levels.forEach(function (level) {
     console[level] = function () {
       var parts = [];
-      for (var i = 0; i < arguments.length; i++) parts.push(__wre.describe(arguments[i]));
-      __wre.push("console", { level: level, text: parts.join(" ") });
+      for (var i = 0; i < arguments.length; i++) parts.push(describe(arguments[i]));
+      push("console", { level: level, text: parts.join(" ") });
     };
   });
   console.dir = console.log;
@@ -53,6 +53,136 @@ pub const RUNTIME: &str = r#"
   console.timeEnd = function () {};
   console.assert = function () {};
   globalThis.console = console;
+
+  var queue = [];
+  var nextId = 1;
+
+  if (withTimers) {
+    globalThis.setTimeout = function (fn, delay) {
+      var id = nextId++;
+      queue.push({
+        id: id,
+        fn: fn,
+        at: Number(delay) || 0,
+        args: Array.prototype.slice.call(arguments, 2)
+      });
+      return id;
+    };
+
+    globalThis.setInterval = function (fn, delay) {
+      return globalThis.setTimeout(fn, delay);
+    };
+
+    globalThis.clearTimeout = function (id) {
+      queue = queue.filter(function (entry) { return entry.id !== id; });
+    };
+
+    globalThis.clearInterval = globalThis.clearTimeout;
+    globalThis.queueMicrotask = function (fn) { globalThis.setTimeout(fn, 0); };
+    globalThis.requestAnimationFrame = function (fn) { return globalThis.setTimeout(fn, 16); };
+    globalThis.cancelAnimationFrame = globalThis.clearTimeout;
+    globalThis.requestIdleCallback = function (fn) { return globalThis.setTimeout(fn, 1); };
+    globalThis.cancelIdleCallback = globalThis.clearTimeout;
+  }
+
+  function runTimers(rounds) {
+    var ran = 0;
+    for (var round = 0; round < (rounds || 8); round++) {
+      var batch = queue.sort(function (a, b) { return a.at - b.at; });
+      queue = [];
+      if (!batch.length) break;
+      for (var i = 0; i < batch.length; i++) {
+        try {
+          batch[i].fn.apply(null, batch[i].args);
+          ran++;
+        } catch (error) {
+          push("errors", { where: "timer", text: String(error && error.message || error) });
+        }
+      }
+    }
+    return ran;
+  }
+
+  function pendingTimers() {
+    return queue.length;
+  }
+
+  function watch(holder, name, label) {
+    if (holder === undefined || holder === null) return false;
+    var target = holder[name];
+    if (target === undefined || target === null) return false;
+    var tag = label || name;
+
+    var proxy = new Proxy(target, {
+      get: function (object, property, receiver) {
+        if (typeof property === "string") {
+          push("access", { on: tag, kind: "get", key: property });
+        }
+        var value = Reflect.get(object, property, object);
+        return typeof value === "function" ? value.bind(object) : value;
+      },
+      set: function (object, property, value) {
+        if (typeof property === "string") {
+          push("access", { on: tag, kind: "set", key: property });
+        }
+        return Reflect.set(object, property, value);
+      },
+      has: function (object, property) {
+        if (typeof property === "string") {
+          push("access", { on: tag, kind: "has", key: property });
+        }
+        return Reflect.has(object, property);
+      }
+    });
+
+    try {
+      Object.defineProperty(holder, name, { value: proxy, configurable: true, writable: true });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function trace(holder, name, label) {
+    if (holder === undefined || holder === null) return false;
+    var original = holder[name];
+    if (typeof original !== "function") return false;
+    var tag = label || name;
+
+    function traced() {
+      var parts = [];
+      for (var i = 0; i < arguments.length; i++) parts.push(describe(arguments[i]));
+      var record = { fn: tag, args: parts };
+      push("calls", record);
+      try {
+        var value = original.apply(this, arguments);
+        record.result = describe(value);
+        return value;
+      } catch (error) {
+        record.threw = String(error && error.message || error);
+        throw error;
+      }
+    }
+
+    try {
+      Object.defineProperty(traced, "name", { value: original.name, configurable: true });
+      Object.defineProperty(traced, "length", { value: original.length, configurable: true });
+      holder[name] = traced;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  return {
+    drain: drain,
+    push: push,
+    describe: describe,
+    runTimers: runTimers,
+    pendingTimers: pendingTimers,
+    watch: watch,
+    trace: trace
+  };
 })();
 "#;
 
@@ -112,54 +242,6 @@ pub fn random(seed: u64) -> String {
     )
 }
 
-pub const TIMERS: &str = r#"
-(function () {
-  var queue = [];
-  var nextId = 1;
-
-  globalThis.setTimeout = function (fn, delay) {
-    var id = nextId++;
-    queue.push({ id: id, fn: fn, at: Number(delay) || 0, args: Array.prototype.slice.call(arguments, 2) });
-    return id;
-  };
-
-  globalThis.setInterval = function (fn, delay) {
-    return globalThis.setTimeout(fn, delay);
-  };
-
-  globalThis.clearTimeout = function (id) {
-    queue = queue.filter(function (entry) { return entry.id !== id; });
-  };
-
-  globalThis.clearInterval = globalThis.clearTimeout;
-  globalThis.queueMicrotask = function (fn) { globalThis.setTimeout(fn, 0); };
-  globalThis.requestAnimationFrame = function (fn) { return globalThis.setTimeout(fn, 16); };
-  globalThis.cancelAnimationFrame = globalThis.clearTimeout;
-  globalThis.requestIdleCallback = function (fn) { return globalThis.setTimeout(fn, 1); };
-  globalThis.cancelIdleCallback = globalThis.clearTimeout;
-
-  globalThis.__wreRunTimers = function (rounds) {
-    var ran = 0;
-    for (var round = 0; round < (rounds || 8); round++) {
-      var batch = queue.sort(function (a, b) { return a.at - b.at; });
-      queue = [];
-      if (!batch.length) break;
-      for (var i = 0; i < batch.length; i++) {
-        try {
-          batch[i].fn.apply(null, batch[i].args);
-          ran++;
-        } catch (error) {
-          __wre.push("errors", { where: "timer", text: String(error && error.message || error) });
-        }
-      }
-    }
-    return ran;
-  };
-
-  globalThis.__wrePendingTimers = function () { return queue.length; };
-})();
-"#;
-
 pub const CODECS: &str = r#"
 (function () {
   var CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -194,71 +276,4 @@ pub const CODECS: &str = r#"
     };
   }
 })();
-"#;
-
-pub const ACCESS_TRAP: &str = r#"
-globalThis.__wreWatch = function (holder, name, label) {
-  var target = holder[name];
-  if (target === undefined || target === null) return false;
-  var tag = label || name;
-
-  var proxy = new Proxy(target, {
-    get: function (object, property, receiver) {
-      if (typeof property === "string") {
-        __wre.push("access", { on: tag, kind: "get", key: property });
-      }
-      var value = Reflect.get(object, property, object);
-      return typeof value === "function" ? value.bind(object) : value;
-    },
-    set: function (object, property, value) {
-      if (typeof property === "string") {
-        __wre.push("access", { on: tag, kind: "set", key: property });
-      }
-      return Reflect.set(object, property, value);
-    },
-    has: function (object, property) {
-      if (typeof property === "string") {
-        __wre.push("access", { on: tag, kind: "has", key: property });
-      }
-      return Reflect.has(object, property);
-    }
-  });
-
-  try {
-    Object.defineProperty(holder, name, { value: proxy, configurable: true, writable: true });
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
-
-globalThis.__wreTrace = function (holder, name, label) {
-  var original = holder[name];
-  if (typeof original !== "function") return false;
-  var tag = label || name;
-
-  function traced() {
-    var parts = [];
-    for (var i = 0; i < arguments.length; i++) parts.push(__wre.describe(arguments[i]));
-    var record = { fn: tag, args: parts };
-    __wre.push("calls", record);
-    try {
-      var value = original.apply(this, arguments);
-      record.result = __wre.describe(value);
-      return value;
-    } catch (error) {
-      record.threw = String(error && error.message || error);
-      throw error;
-    }
-  }
-
-  try {
-    Object.defineProperty(traced, "name", { value: original.name, configurable: true });
-    Object.defineProperty(traced, "length", { value: original.length, configurable: true });
-    holder[name] = traced;
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
 "#;

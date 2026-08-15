@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -22,10 +22,99 @@ pub fn initialize() {
 
 pub type HostFn = Box<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>;
 
+struct ShapeEntry {
+    prototype: v8::Global<v8::Object>,
+    brand: Option<String>,
+    promise: bool,
+    singleton: bool,
+    cached: Mutex<Option<v8::Global<v8::Object>>>,
+}
+
 struct HostEntry {
     name: String,
     handler: HostFn,
+    brand: Option<String>,
+    state: bool,
+    shape: Option<ShapeEntry>,
 }
+
+#[derive(Debug, Clone)]
+pub struct Shape {
+    pub prototype: String,
+    pub brand: Option<String>,
+    pub promise: bool,
+    pub singleton: bool,
+}
+
+impl Shape {
+    pub fn new(prototype: &str) -> Self {
+        Self {
+            prototype: prototype.to_string(),
+            brand: None,
+            promise: false,
+            singleton: false,
+        }
+    }
+
+    pub fn branded(mut self, brand: &str) -> Self {
+        self.brand = Some(brand.to_string());
+        self
+    }
+
+    pub fn in_a_promise(mut self) -> Self {
+        self.promise = true;
+        self
+    }
+
+    pub fn shared(mut self) -> Self {
+        self.singleton = true;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HostSpec<'a> {
+    pub name: &'a str,
+    pub display: Option<&'a str>,
+    pub receiver_brand: Option<&'a str>,
+    pub state: bool,
+    pub arity: i32,
+    pub shape: Option<Shape>,
+}
+
+impl<'a> HostSpec<'a> {
+    pub fn new(name: &'a str) -> Self {
+        Self { name, display: None, receiver_brand: None, state: false, arity: 0, shape: None }
+    }
+
+    pub fn taking(mut self, arity: i32) -> Self {
+        self.arity = arity;
+        self
+    }
+
+    pub fn called(mut self, display: &'a str) -> Self {
+        self.display = Some(display);
+        self
+    }
+
+    pub fn on_brand(mut self, brand: &'a str) -> Self {
+        self.receiver_brand = Some(brand);
+        self
+    }
+
+    pub fn with_state(mut self) -> Self {
+        self.state = true;
+        self
+    }
+
+    pub fn building(mut self, shape: Shape) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+}
+
+pub const BRAND_KEY: &str = "wre.brand";
+pub const STATE_KEY: &str = "wre.state";
 
 #[derive(Debug, Clone)]
 pub struct RealmOptions {
@@ -111,6 +200,35 @@ pub struct Realm {
     functions: Vec<v8::Global<v8::Function>>,
     hosts: Vec<Arc<HostEntry>>,
     options: RealmOptions,
+    control: Option<v8::Global<v8::Object>>,
+}
+
+pub fn fresh_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let clock = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos() as u64)
+        .unwrap_or(0);
+
+    let mut state = clock
+        ^ (COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        ^ 0xD1B5_4A32_D192_ED03;
+
+    let letters = b"abcdefghijklmnopqrstuvwxyz";
+    let mut out = String::with_capacity(9);
+
+    for _ in 0..9 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        out.push(letters[(state % 26) as usize] as char);
+    }
+
+    out
 }
 
 impl Realm {
@@ -136,6 +254,7 @@ impl Realm {
             functions: Vec::new(),
             hosts: Vec::new(),
             options,
+            control: None,
         };
 
         realm.run_prelude()?;
@@ -147,7 +266,9 @@ impl Realm {
     }
 
     fn run_prelude(&mut self) -> Result<()> {
-        self.eval_unit(prelude::RUNTIME, "wre:runtime")?;
+        let core = prelude::core(self.options.timers);
+        let control = self.eval_object(&core, "wre:core")?;
+        self.control = Some(control);
 
         if let Some(epoch) = self.options.clock_ms {
             let source = prelude::clock(epoch);
@@ -159,15 +280,10 @@ impl Realm {
             self.eval_unit(&source, "wre:random")?;
         }
 
-        if self.options.timers {
-            self.eval_unit(prelude::TIMERS, "wre:timers")?;
-        }
-
         if self.options.codecs {
             self.eval_unit(prelude::CODECS, "wre:codecs")?;
         }
 
-        self.eval_unit(prelude::ACCESS_TRAP, "wre:trap")?;
         Ok(())
     }
 
@@ -249,6 +365,116 @@ impl Realm {
                         "{name}: {}",
                         describe_exception(tc)
                     )));
+                }
+            }
+        };
+
+        guard.finish();
+        Ok(outcome)
+    }
+
+    fn eval_object(&mut self, source: &str, name: &str) -> Result<v8::Global<v8::Object>> {
+        let _entered = self.enter();
+        let guard = self.guard();
+        let context = self.context.clone();
+
+        let stored = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &context);
+            v8::tc_scope!(let tc, scope);
+
+            let Some(code) = v8::String::new(tc, source) else {
+                return Err(Error::msg(format!("{name}: source too large for v8")));
+            };
+
+            let Some(script) = v8::Script::compile(tc, code, None) else {
+                return Err(Error::msg(format!(
+                    "{name}: compile failed: {}",
+                    describe_exception(tc)
+                )));
+            };
+
+            let Some(value) = script.run(tc) else {
+                return Err(Error::msg(format!("{name}: {}", describe_exception(tc))));
+            };
+
+            let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+                return Err(Error::msg(format!("{name}: did not return an object")));
+            };
+
+            v8::Global::new(tc, object)
+        };
+
+        guard.finish();
+        Ok(stored)
+    }
+
+    fn control_invoke(
+        &mut self,
+        method: &str,
+        holder: Option<&str>,
+        args: &[Value],
+    ) -> Result<Value> {
+        let _entered = self.enter();
+        let Some(control) = self.control.clone() else {
+            return Err(Error::msg("this realm carries no instrumentation"));
+        };
+
+        let context = self.context.clone();
+        let guard = self.guard();
+
+        let outcome = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &context);
+            v8::tc_scope!(let tc, scope);
+
+            let object = v8::Local::new(tc, &control);
+
+            let Some(key) = v8::String::new(tc, method) else {
+                return Err(Error::msg(format!("method name {method} is not usable")));
+            };
+
+            let Some(value) = object.get(tc, key.into()) else {
+                return Err(Error::msg(format!("the instrumentation has no {method}")));
+            };
+
+            let Ok(function) = v8::Local::<v8::Function>::try_from(value) else {
+                return Err(Error::msg(format!("the instrumentation's {method} is not a function")));
+            };
+
+            let mut locals = Vec::with_capacity(args.len() + 1);
+
+            if let Some(expression) = holder {
+                let Some(code) = v8::String::new(tc, expression) else {
+                    return Err(Error::msg(format!("expression {expression} is not usable")));
+                };
+
+                let Some(script) = v8::Script::compile(tc, code, None) else {
+                    return Err(Error::msg(format!("expression {expression} did not compile")));
+                };
+
+                let Some(target) = script.run(tc) else {
+                    return Err(Error::msg(format!(
+                        "expression {expression} threw: {}",
+                        describe_exception(tc)
+                    )));
+                };
+
+                locals.push(target);
+            }
+
+            for argument in args {
+                locals.push(from_json(tc, argument)?);
+            }
+
+            match function.call(tc, object.into(), &locals) {
+                Some(value) => to_json(tc, value),
+                None => {
+                    if tc.has_terminated() {
+                        return Err(Error::msg(format!(
+                            "{method}: execution ran past the {:?} budget",
+                            self.options.timeout
+                        )));
+                    }
+                    return Err(Error::msg(format!("{method} threw: {}", describe_exception(tc))));
                 }
             }
         };
@@ -375,61 +601,159 @@ impl Realm {
     }
 
     pub fn register_host(&mut self, name: &str, handler: HostFn) -> Result<()> {
+        self.register(HostSpec::new(name), handler)
+    }
+
+    pub fn register_branded_host(
+        &mut self,
+        name: &str,
+        brand: &str,
+        handler: HostFn,
+    ) -> Result<()> {
+        self.register(HostSpec::new(name).on_brand(brand), handler)
+    }
+
+    pub fn brand_object(&mut self, expression: &str, brand: &str) -> Result<()> {
         let _entered = self.enter();
-        let entry = Arc::new(HostEntry { name: name.to_string(), handler });
+        let context = self.context.clone();
+        v8::scope_with_context!(let scope, &mut self.isolate, &context);
+        v8::tc_scope!(let tc, scope);
+
+        let Some(source) = v8::String::new(tc, expression) else {
+            return Err(Error::msg(format!("expression {expression} is not usable")));
+        };
+
+        let Some(script) = v8::Script::compile(tc, source, None) else {
+            return Err(Error::msg(format!("expression {expression} did not compile")));
+        };
+
+        let Some(value) = script.run(tc) else {
+            return Err(Error::msg(format!("expression {expression} did not run")));
+        };
+
+        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+            return Err(Error::msg(format!("expression {expression} is not an object")));
+        };
+
+        let Some(key) = v8::String::new(tc, BRAND_KEY) else {
+            return Err(Error::msg("the brand key is not usable"));
+        };
+        let private = v8::Private::for_api(tc, Some(key));
+
+        let Some(marker) = v8::String::new(tc, brand) else {
+            return Err(Error::msg(format!("brand {brand} is not usable")));
+        };
+
+        object.set_private(tc, private, marker.into());
+        Ok(())
+    }
+
+    pub fn register(&mut self, spec: HostSpec<'_>, handler: HostFn) -> Result<()> {
+        let _entered = self.enter();
+        let context = self.context.clone();
+        v8::scope_with_context!(let scope, &mut self.isolate, &context);
+        v8::tc_scope!(let tc, scope);
+
+        let shape = match &spec.shape {
+            None => None,
+            Some(shape) => {
+                let Some(source) = v8::String::new(tc, &shape.prototype) else {
+                    return Err(Error::msg(format!("prototype {} is not usable", shape.prototype)));
+                };
+
+                let Some(script) = v8::Script::compile(tc, source, None) else {
+                    return Err(Error::msg(format!(
+                        "prototype {} did not compile",
+                        shape.prototype
+                    )));
+                };
+
+                let Some(value) = script.run(tc) else {
+                    return Err(Error::msg(format!("prototype {} did not run", shape.prototype)));
+                };
+
+                let Ok(prototype) = v8::Local::<v8::Object>::try_from(value) else {
+                    return Err(Error::msg(format!(
+                        "prototype {} is not an object",
+                        shape.prototype
+                    )));
+                };
+
+                Some(ShapeEntry {
+                    prototype: v8::Global::new(tc, prototype),
+                    brand: shape.brand.clone(),
+                    promise: shape.promise,
+                    singleton: shape.singleton,
+                    cached: Mutex::new(None),
+                })
+            }
+        };
+
+        let entry = Arc::new(HostEntry {
+            name: spec.name.to_string(),
+            handler,
+            brand: spec.receiver_brand.map(str::to_string),
+            state: spec.state,
+            shape,
+        });
+
         let pointer = Arc::as_ptr(&entry) as *mut std::ffi::c_void;
         self.hosts.push(Arc::clone(&entry));
 
-        let context = self.context.clone();
-        v8::scope_with_context!(let scope, &mut self.isolate, &context);
-
-        let global = scope.get_current_context().global(scope);
-        let Some(key) = v8::String::new(scope, name) else {
-            return Err(Error::msg(format!("host name {name} is not usable")));
+        let global = tc.get_current_context().global(tc);
+        let Some(key) = v8::String::new(tc, spec.name) else {
+            return Err(Error::msg(format!("host name {} is not usable", spec.name)));
         };
 
-        let external = v8::External::new(scope, pointer);
+        let external = v8::External::new(tc, pointer);
         let Some(function) = v8::Function::builder(host_trampoline)
             .data(external.into())
-            .build(scope)
+            .length(spec.arity)
+            .build(tc)
         else {
-            return Err(Error::msg(format!("could not build host function {name}")));
+            return Err(Error::msg(format!("could not build host function {}", spec.name)));
         };
 
-        global.set(scope, key.into(), function.into());
+        if let Some(display) = spec.display
+            && let Some(text) = v8::String::new(tc, display)
+        {
+            function.set_name(text);
+        }
+
+        global.set(tc, key.into(), function.into());
         Ok(())
     }
 
     pub fn records(&mut self) -> Result<Records> {
-        let raw = self.eval_json("__wre.drain()")?;
+        let raw = self.control_invoke("drain", None, &[])?;
         Ok(parse_records(&raw))
     }
 
     pub fn run_timers(&mut self, rounds: usize) -> Result<usize> {
-        let value = self.eval_json(&format!("__wreRunTimers({rounds})"))?;
+        let value = self.control_invoke("runTimers", None, &[Value::from(rounds)])?;
         Ok(value.as_u64().unwrap_or(0) as usize)
     }
 
     pub fn pending_timers(&mut self) -> Result<usize> {
-        let value = self.eval_json("__wrePendingTimers()")?;
+        let value = self.control_invoke("pendingTimers", None, &[])?;
         Ok(value.as_u64().unwrap_or(0) as usize)
     }
 
     pub fn watch(&mut self, holder: &str, name: &str, label: &str) -> Result<bool> {
-        let value = self.eval_json(&format!(
-            "__wreWatch({holder}, {}, {})",
-            serde_json::to_string(name).unwrap_or_default(),
-            serde_json::to_string(label).unwrap_or_default()
-        ))?;
+        let value = self.control_invoke(
+            "watch",
+            Some(holder),
+            &[Value::from(name), Value::from(label)],
+        )?;
         Ok(value.as_bool().unwrap_or(false))
     }
 
     pub fn trace(&mut self, holder: &str, name: &str, label: &str) -> Result<bool> {
-        let value = self.eval_json(&format!(
-            "__wreTrace({holder}, {}, {})",
-            serde_json::to_string(name).unwrap_or_default(),
-            serde_json::to_string(label).unwrap_or_default()
-        ))?;
+        let value = self.control_invoke(
+            "trace",
+            Some(holder),
+            &[Value::from(name), Value::from(label)],
+        )?;
         Ok(value.as_bool().unwrap_or(false))
     }
 
@@ -463,17 +787,48 @@ fn host_trampoline(
 
     let entry = unsafe { &*(external.value() as *const HostEntry) };
 
-    let mut values = Vec::with_capacity(args.length() as usize);
+    if let Some(brand) = &entry.brand
+        && !carries_brand(scope, args.this(), brand)
+    {
+        if let Some(message) = v8::String::new(scope, "Illegal invocation") {
+            let exception = v8::Exception::type_error(scope, message);
+            scope.throw_exception(exception);
+        }
+        return;
+    }
+
+    let mut values = Vec::with_capacity(args.length() as usize + 1);
+
+    if entry.state {
+        match own_state(scope, args.this()) {
+            Some(state) => values.push(state),
+            None => {
+                if let Some(message) = v8::String::new(scope, "Illegal invocation") {
+                    let exception = v8::Exception::type_error(scope, message);
+                    scope.throw_exception(exception);
+                }
+                return;
+            }
+        }
+    }
+
     for index in 0..args.length() {
         values.push(to_json(scope, args.get(index)));
     }
 
     match (entry.handler)(&values) {
-        Ok(value) => {
-            if let Ok(local) = from_json(scope, &value) {
-                out.set(local);
+        Ok(value) => match &entry.shape {
+            None => {
+                if let Ok(local) = from_json(scope, &value) {
+                    out.set(local);
+                }
             }
-        }
+            Some(shape) => {
+                if let Some(local) = shaped(scope, shape, &value) {
+                    out.set(local);
+                }
+            }
+        },
         Err(error) => {
             let text = format!("{}: {error}", entry.name);
             if let Some(message) = v8::String::new(scope, &text) {
@@ -482,6 +837,107 @@ fn host_trampoline(
             }
         }
     }
+}
+
+fn private_key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> Option<v8::Local<'s, v8::Private>> {
+    let key = v8::String::new(scope, name)?;
+    Some(v8::Private::for_api(scope, Some(key)))
+}
+
+fn own_state(scope: &mut v8::PinScope, receiver: v8::Local<v8::Object>) -> Option<Value> {
+    let private = private_key(scope, STATE_KEY)?;
+    let found = receiver.get_private(scope, private)?;
+
+    if found.is_undefined() {
+        return None;
+    }
+
+    Some(to_json(scope, found))
+}
+
+fn shaped<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    shape: &ShapeEntry,
+    value: &Value,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if let Ok(cached) = shape.cached.lock()
+        && let Some(stored) = cached.as_ref()
+    {
+        let object = v8::Local::new(scope, stored);
+        return Some(finished(scope, shape, object));
+    }
+
+    let object = v8::Object::new(scope);
+    let prototype = v8::Local::new(scope, &shape.prototype);
+    object.set_prototype(scope, prototype.into())?;
+
+    let state = from_json(scope, value).ok()?;
+    let key = private_key(scope, STATE_KEY)?;
+    object.set_private(scope, key, state);
+
+    if let Some(brand) = &shape.brand {
+        let marker = v8::String::new(scope, brand)?;
+        let key = private_key(scope, BRAND_KEY)?;
+        object.set_private(scope, key, marker.into());
+    }
+
+    if shape.singleton
+        && let Ok(mut cached) = shape.cached.lock()
+        && cached.is_none()
+    {
+        *cached = Some(v8::Global::new(scope, object));
+    }
+
+    Some(finished(scope, shape, object))
+}
+
+fn finished<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    shape: &ShapeEntry,
+    object: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Value> {
+    if !shape.promise {
+        return object.into();
+    }
+
+    match v8::PromiseResolver::new(scope) {
+        Some(resolver) => {
+            let promise = resolver.get_promise(scope);
+            resolver.resolve(scope, object.into());
+            promise.into()
+        }
+        None => object.into(),
+    }
+}
+
+fn carries_brand(scope: &mut v8::PinScope, receiver: v8::Local<v8::Object>, brand: &str) -> bool {
+    let Some(key) = v8::String::new(scope, BRAND_KEY) else {
+        return false;
+    };
+    let private = v8::Private::for_api(scope, Some(key));
+
+    let mut current = Some(receiver);
+    let mut hops = 0;
+
+    while let Some(object) = current {
+        if hops > 16 {
+            return false;
+        }
+        hops += 1;
+
+        if let Some(found) = object.get_private(scope, private)
+            && !found.is_undefined()
+            && found.to_rust_string_lossy(scope) == brand
+        {
+            return true;
+        }
+
+        current = object
+            .get_prototype(scope)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    }
+
+    false
 }
 
 pub fn to_json(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> Value {

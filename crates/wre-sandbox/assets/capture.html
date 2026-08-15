@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wre sandbox capture</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+    max-width: 860px;
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 20px; opacity: 0.75; }
+  fieldset { border: 1px solid rgba(128,128,128,0.4); border-radius: 6px; margin: 0 0 16px; padding: 12px 14px; }
+  legend { padding: 0 6px; font-weight: 600; }
+  label { display: block; margin: 8px 0 4px; font-weight: 600; }
+  input, textarea {
+    width: 100%; box-sizing: border-box; padding: 8px;
+    border: 1px solid rgba(128,128,128,0.5); border-radius: 4px;
+    font: inherit; background: transparent; color: inherit;
+  }
+  textarea { min-height: 60px; resize: vertical; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; margin: 12px 8px 0 0;
+    border: 1px solid rgba(128,128,128,0.5); border-radius: 4px;
+    background: transparent; color: inherit; cursor: pointer;
+  }
+  button[disabled] { opacity: 0.5; cursor: default; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; }
+  th { width: 200px; font-weight: 600; }
+  td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+  #status { margin-top: 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(128,128,128,0.5); display: none; }
+  #status.on { display: block; }
+  ul.findings { margin: 8px 0 0; padding-left: 20px; font-size: 13px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<h1>wre sandbox capture</h1>
+<p class="lead">Reads this browser's real values and hands them to <code>wre</code> as a sandbox profile. Open it in the browser you want to replay, on the device you want to replay. Nothing here is generated or guessed.</p>
+
+<fieldset>
+  <legend>Label</legend>
+  <label for="label">Name this device</label>
+  <input id="label" placeholder="MacBook Pro M3, Chrome 140">
+  <label for="notes">Notes</label>
+  <textarea id="notes" placeholder="Where it came from, screen scaling, anything that would change the numbers"></textarea>
+</fieldset>
+
+<fieldset>
+  <legend>What was read</legend>
+  <table id="summary"></table>
+  <ul class="findings" id="findings"></ul>
+</fieldset>
+
+<button id="send">Send to wre</button>
+<button id="download">Download JSON</button>
+<div id="status"></div>
+
+<script>
+const FONT_PROBE_TEXT = "mmmmmmmmmmlli";
+const FONT_PROBE_SIZE = "72px";
+
+const NAVIGATOR_KEYS = [
+  "userAgent", "appVersion", "appName", "appCodeName", "product", "productSub",
+  "vendor", "vendorSub", "platform", "oscpu", "language", "languages",
+  "hardwareConcurrency", "deviceMemory", "maxTouchPoints", "webdriver",
+  "cookieEnabled", "onLine", "doNotTrack", "pdfViewerEnabled"
+];
+
+const SCREEN_KEYS = [
+  "width", "height", "availWidth", "availHeight", "availLeft", "availTop",
+  "colorDepth", "pixelDepth"
+];
+
+const WINDOW_KEYS = [
+  "innerWidth", "innerHeight", "outerWidth", "outerHeight",
+  "screenX", "screenY", "devicePixelRatio", "scrollX", "scrollY"
+];
+
+const WEBGL_PARAMETERS = [
+  7936, 7937, 7938, 35724, 3379, 34930, 36347, 36348, 34076, 34921,
+  35660, 35661, 3386, 33901, 33902, 3410, 3411, 3412, 3413, 3414, 3415
+];
+
+const MEDIA_TYPES = [
+  'video/mp4; codecs="avc1.42E01E"',
+  'video/mp4; codecs="avc1.640028"',
+  'video/mp4; codecs="av01.0.05M.08"',
+  'video/webm; codecs="vp8"',
+  'video/webm; codecs="vp9"',
+  'video/ogg; codecs="theora"',
+  'application/x-mpegURL',
+  'audio/mpeg',
+  'audio/aac',
+  'audio/wav; codecs="1"',
+  'audio/webm; codecs="opus"',
+  'audio/ogg; codecs="vorbis"'
+];
+
+const MEDIA_QUERIES = [
+  "(prefers-color-scheme: dark)",
+  "(prefers-reduced-motion: reduce)",
+  "(prefers-reduced-transparency: reduce)",
+  "(prefers-contrast: more)",
+  "(forced-colors: active)",
+  "(hover: hover)",
+  "(any-hover: hover)",
+  "(pointer: fine)",
+  "(pointer: coarse)",
+  "(any-pointer: coarse)",
+  "(color-gamut: p3)",
+  "(dynamic-range: high)",
+  "(display-mode: browser)",
+  "(orientation: portrait)",
+  "(update: fast)",
+  "(scripting: enabled)"
+];
+
+const PERMISSIONS = [
+  "notifications", "geolocation", "camera", "microphone", "midi",
+  "push", "persistent-storage", "clipboard-read", "clipboard-write",
+  "background-sync", "accelerometer", "gyroscope"
+];
+
+const FONTS = [
+  "Arial", "Arial Black", "Calibri", "Cambria", "Comic Sans MS", "Consolas",
+  "Courier New", "Georgia", "Helvetica", "Impact", "Menlo", "Monaco",
+  "MS Gothic", "Noto Sans", "Roboto", "Segoe UI", "Tahoma",
+  "Times New Roman", "Trebuchet MS", "Verdana"
+];
+
+function plain(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value.length === "number") return Array.prototype.slice.call(value).map(plain);
+  return String(value);
+}
+
+function readInterface(brand, constructorName, instanceName, source, keys) {
+  const properties = {};
+  for (const key of keys) {
+    let value;
+    try {
+      value = plain(source[key]);
+    } catch (error) {
+      continue;
+    }
+    if (value !== undefined) properties[key] = value;
+  }
+  return { brand, constructor: constructorName, instance: instanceName, properties };
+}
+
+function readPlugins() {
+  const list = [];
+  const plugins = navigator.plugins || [];
+  for (let index = 0; index < plugins.length; index += 1) {
+    const plugin = plugins[index];
+    list.push({
+      name: String(plugin.name || ""),
+      filename: String(plugin.filename || ""),
+      description: String(plugin.description || "")
+    });
+  }
+  return list;
+}
+
+function readWebgl() {
+  const parameters = {};
+  const extensions = [];
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  if (!gl) return { parameters, extensions };
+
+  const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+  if (debugInfo) {
+    parameters["37445"] = plain(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL));
+    parameters["37446"] = plain(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL));
+  }
+
+  for (const code of WEBGL_PARAMETERS) {
+    let value;
+    try {
+      value = plain(gl.getParameter(code));
+    } catch (error) {
+      continue;
+    }
+    if (value !== undefined && value !== null) parameters[String(code)] = value;
+  }
+
+  for (const name of gl.getSupportedExtensions() || []) extensions.push(name);
+  return { parameters, extensions };
+}
+
+function readMediaSupport() {
+  const support = {};
+  const probe = document.createElement("video");
+  const audio = document.createElement("audio");
+  for (const type of MEDIA_TYPES) {
+    const element = type.indexOf("audio/") === 0 ? audio : probe;
+    try {
+      support[type] = element.canPlayType(type);
+    } catch (error) {
+      support[type] = "";
+    }
+  }
+  return support;
+}
+
+function readMediaQueries() {
+  const answers = {};
+  for (const query of MEDIA_QUERIES) {
+    try {
+      answers[query] = window.matchMedia(query).matches;
+    } catch (error) {
+      continue;
+    }
+  }
+  return answers;
+}
+
+async function readPermissions() {
+  const states = {};
+  if (!navigator.permissions || !navigator.permissions.query) return states;
+  for (const name of PERMISSIONS) {
+    try {
+      const status = await navigator.permissions.query({ name });
+      states[name] = status.state;
+    } catch (error) {
+      continue;
+    }
+  }
+  return states;
+}
+
+function readFontWidths() {
+  const widths = {};
+  const context = document.createElement("canvas").getContext("2d");
+  for (const family of FONTS) {
+    context.font = FONT_PROBE_SIZE + ' "' + family + '"';
+    widths[family] = context.measureText(FONT_PROBE_TEXT).width;
+  }
+  return widths;
+}
+
+function readLayout() {
+  const layout = {};
+  const root = document.documentElement;
+  layout["scrollbar.width"] = window.innerWidth - root.clientWidth;
+  layout["root.clientWidth"] = root.clientWidth;
+  layout["root.clientHeight"] = root.clientHeight;
+
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;left:-9999px;top:0;width:10em;padding:1ex;font:16px Arial";
+  probe.textContent = FONT_PROBE_TEXT;
+  document.body.appendChild(probe);
+  const rect = probe.getBoundingClientRect();
+  layout["box.width"] = rect.width;
+  layout["box.height"] = rect.height;
+  layout["font.default"] = parseFloat(getComputedStyle(probe).fontSize);
+
+  const span = document.createElement("span");
+  span.style.cssText = "font:16px Arial;white-space:nowrap";
+  span.textContent = FONT_PROBE_TEXT;
+  probe.textContent = "";
+  probe.appendChild(span);
+  const text = span.getBoundingClientRect();
+  layout["text.width"] = text.width;
+  layout["text.height"] = text.height;
+
+  probe.remove();
+  return layout;
+}
+
+function fnv1a(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return "fnv1a:" + hash.toString(16).padStart(8, "0");
+}
+
+async function digest(text) {
+  if (!window.crypto || !window.crypto.subtle) return fnv1a(text);
+  const bytes = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return "sha256:" + hex;
+}
+
+async function readCanvas() {
+  const answers = {};
+
+  const text = document.createElement("canvas");
+  text.width = 280;
+  text.height = 60;
+  const ctx = text.getContext("2d");
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#f60";
+  ctx.fillRect(10, 10, 62, 20);
+  ctx.fillStyle = "#069";
+  ctx.font = '16px "Arial"';
+  ctx.fillText("wre sandbox 0123456789", 4, 24);
+  ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+  ctx.font = '18px "Times New Roman"';
+  ctx.fillText("wre sandbox 0123456789", 6, 44);
+  answers["2d:text"] = await digest(text.toDataURL());
+
+  const shapes = document.createElement("canvas");
+  shapes.width = 200;
+  shapes.height = 200;
+  const shape = shapes.getContext("2d");
+  shape.globalCompositeOperation = "multiply";
+  const colors = ["#f0f", "#0ff", "#ff0"];
+  const centers = [[50, 50], [100, 50], [75, 100]];
+  for (let index = 0; index < 3; index += 1) {
+    shape.fillStyle = colors[index];
+    shape.beginPath();
+    shape.arc(centers[index][0], centers[index][1], 50, 0, Math.PI * 2, true);
+    shape.closePath();
+    shape.fill();
+  }
+  shape.fillStyle = "#f9c";
+  shape.arc(75, 75, 75, 0, Math.PI * 2, true);
+  shape.arc(75, 75, 25, 0, Math.PI * 2, true);
+  shape.fill("evenodd");
+  answers["2d:shapes"] = await digest(shapes.toDataURL());
+
+  const gl3d = document.createElement("canvas");
+  gl3d.width = 128;
+  gl3d.height = 128;
+  const gl = gl3d.getContext("webgl") || gl3d.getContext("experimental-webgl");
+  if (gl) {
+    gl.clearColor(0.2, 0.4, 0.6, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    answers["webgl:clear"] = await digest(gl3d.toDataURL());
+  }
+
+  return answers;
+}
+
+function readWindowOrder() {
+  try {
+    return Object.getOwnPropertyNames(window);
+  } catch (error) {
+    return [];
+  }
+}
+
+async function collect() {
+  const webgl = readWebgl();
+
+  const profile = {
+    interfaces: [
+      readInterface("Navigator", "Navigator", "navigator", navigator, NAVIGATOR_KEYS),
+      readInterface("Screen", "Screen", "screen", screen, SCREEN_KEYS),
+      readInterface("Window", "Window", "globalThis", window, WINDOW_KEYS)
+    ],
+    plugins: readPlugins(),
+    webgl_parameters: webgl.parameters,
+    webgl_extensions: webgl.extensions,
+    media_support: readMediaSupport(),
+    media_queries: readMediaQueries(),
+    permissions: await readPermissions(),
+    font_widths: readFontWidths(),
+    layout: readLayout(),
+    canvas: await readCanvas(),
+    window_order: readWindowOrder()
+  };
+
+  return {
+    label: "",
+    notes: "",
+    origin: {
+      user_agent: navigator.userAgent,
+      font_probe: FONT_PROBE_SIZE + " " + FONT_PROBE_TEXT,
+      page: location.href
+    },
+    profile
+  };
+}
+
+function localFindings(record) {
+  const findings = [];
+  const navigatorProperties = record.profile.interfaces[0].properties;
+
+  if (navigatorProperties.webdriver === true) findings.push("navigator.webdriver is true, this browser is automated");
+  if ((navigatorProperties.userAgent || "").indexOf("Headless") >= 0) findings.push("the user agent says Headless");
+
+  const renderer = record.profile.webgl_parameters["37446"] || "";
+  if (/SwiftShader|llvmpipe|Mesa OffScreen/.test(renderer)) findings.push("software WebGL renderer: " + renderer);
+  if (!renderer) findings.push("no unmasked WebGL renderer, WEBGL_debug_renderer_info is unavailable");
+  if (!record.profile.plugins.length) findings.push("no plugins were listed");
+  if (Object.keys(record.profile.canvas).some((key) => String(record.profile.canvas[key]).indexOf("fnv1a:") === 0)) {
+    findings.push("canvas hashes use fnv1a, crypto.subtle needs a secure context (use 127.0.0.1 or https)");
+  }
+
+  return findings;
+}
+
+function renderSummary(record) {
+  const navigatorProperties = record.profile.interfaces[0].properties;
+  const rows = [
+    ["user agent", navigatorProperties.userAgent],
+    ["platform", navigatorProperties.platform + ", " + navigatorProperties.hardwareConcurrency + " cores"],
+    ["languages", (navigatorProperties.languages || []).join(", ")],
+    ["screen", record.profile.interfaces[1].properties.width + " x " + record.profile.interfaces[1].properties.height +
+      " at " + record.profile.interfaces[2].properties.devicePixelRatio + "x"],
+    ["webgl renderer", record.profile.webgl_parameters["37446"] || "unavailable"],
+    ["counts", record.profile.plugins.length + " plugins, " +
+      record.profile.webgl_extensions.length + " webgl extensions, " +
+      Object.keys(record.profile.media_support).length + " media types, " +
+      Object.keys(record.profile.permissions).length + " permissions, " +
+      record.profile.window_order.length + " window properties"]
+  ];
+
+  document.getElementById("summary").innerHTML = rows
+    .map((row) => "<tr><th>" + row[0] + "</th><td></td></tr>")
+    .join("");
+
+  const cells = document.querySelectorAll("#summary td");
+  rows.forEach((row, index) => { cells[index].textContent = String(row[1]); });
+
+  const findings = localFindings(record);
+  document.getElementById("findings").innerHTML = findings.map(() => "<li></li>").join("");
+  const items = document.querySelectorAll("#findings li");
+  findings.forEach((finding, index) => { items[index].textContent = finding; });
+}
+
+function say(text, tone) {
+  const status = document.getElementById("status");
+  status.className = "on";
+  status.textContent = text;
+  status.style.borderColor = tone === "bad" ? "#c33" : "rgba(128,128,128,0.5)";
+}
+
+let captured = null;
+
+collect().then((record) => {
+  captured = record;
+  renderSummary(record);
+}).catch((error) => {
+  say("capture failed: " + error, "bad");
+});
+
+document.getElementById("send").addEventListener("click", async () => {
+  if (!captured) return;
+  captured.label = document.getElementById("label").value.trim();
+  captured.notes = document.getElementById("notes").value.trim();
+
+  const button = document.getElementById("send");
+  button.disabled = true;
+
+  try {
+    const response = await fetch("/profile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(captured)
+    });
+    const answer = await response.json();
+    if (!response.ok || answer.error) throw new Error(answer.error || response.status);
+    say("stored as " + answer.id + " at " + answer.path +
+      (answer.warnings ? ", " + answer.warnings + " warnings, check the wre output" : ""));
+  } catch (error) {
+    button.disabled = false;
+    say("could not reach wre: " + error + ". Use Download JSON and `wre sandbox import`.", "bad");
+  }
+});
+
+document.getElementById("download").addEventListener("click", () => {
+  if (!captured) return;
+  captured.label = document.getElementById("label").value.trim();
+  captured.notes = document.getElementById("notes").value.trim();
+
+  const blob = new Blob([JSON.stringify(captured, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "sandbox-profile.json";
+  link.click();
+  URL.revokeObjectURL(link.href);
+});
+</script>
+</body>
+</html>

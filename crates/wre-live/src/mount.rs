@@ -178,23 +178,25 @@ pub fn mount(source: &str, plan: &MountPlan, options: RealmOptions) -> Result<Mo
         roles.roles
     };
 
+    let sink = format!("{}Roles", crate::realm::fresh_name());
+
     let prepared = if detected.is_empty() {
         patched
     } else {
-        let block = role_export_block(&detected);
+        let block = role_export_block(&detected, &sink);
         let (directives, body) = split_directives(&patched);
         format!("{directives}{block}{body}\n{block}")
     };
 
-    finish(prepared, plan, options, detected, applied)
+    finish(prepared, plan, options, detected, applied, &sink)
 }
 
-fn role_export_block(detected: &BTreeMap<String, String>) -> String {
-    let mut out = String::from("\n;globalThis.__wreRoles = globalThis.__wreRoles || {};\n");
+fn role_export_block(detected: &BTreeMap<String, String>, sink: &str) -> String {
+    let mut out = format!("\n;globalThis.{sink} = globalThis.{sink} || {{}};\n");
 
     for (role, name) in detected {
         out.push_str(&format!(
-            ";try {{ if (typeof {name} !== 'undefined' && {name} !== undefined) globalThis.__wreRoles[{}] = {name}; }} catch (error) {{}}\n",
+            ";try {{ if (typeof {name} !== 'undefined' && {name} !== undefined) globalThis.{sink}[{}] = {name}; }} catch (error) {{}}\n",
             quote_key(role)
         ));
     }
@@ -236,6 +238,7 @@ fn finish(
     options: RealmOptions,
     detected: BTreeMap<String, String>,
     applied: usize,
+    sink: &str,
 ) -> Result<Mount> {
     let mut realm = Realm::new(options)?;
 
@@ -263,7 +266,7 @@ fn finish(
     let mut roles = BTreeMap::new();
 
     for role in detected.keys() {
-        let expression = format!("__wreRoles[{}]", quote_key(role));
+        let expression = format!("globalThis[{}][{}]", quote_key(sink), quote_key(role));
         match realm.capture(role, &expression) {
             Ok(handle) => {
                 handles.insert(role.clone(), handle);
@@ -288,6 +291,8 @@ fn finish(
             }
         }
     }
+
+    realm.eval_unit(&format!("delete globalThis[{}];", quote_key(sink)), "wre:roles-cleanup")?;
 
     let records = realm.records().unwrap_or_default();
 
