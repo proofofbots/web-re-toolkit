@@ -1,0 +1,19 @@
+[package]
+name = "wre-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Turns a bundle descriptor into typed client packages for node, python, go and rust"
+
+[dependencies]
+wre-client.workspace = true
+wre-core.workspace = true
+
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tracing.workspace = true
