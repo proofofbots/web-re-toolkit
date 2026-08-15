@@ -336,22 +336,29 @@ def _split_session(
     return session, None
 
 
+STDERR_MODES = ("inherit", "ignore", "devnull")
+
+
+def stderr_mode(requested: str = "ignore") -> str:
+    choice = os.environ.get("WRE_STDERR", requested)
+    if choice not in STDERR_MODES:
+        raise ValueError(f"stderr must be one of {STDERR_MODES}, got {choice!r}")
+    return "inherit" if choice == "inherit" else "ignore"
+
+
 def connect(
     binary: Optional[str] = None,
     args: Sequence[str] = (),
     env: Optional[Mapping[str, str]] = None,
     cwd: Optional[str] = None,
-    stderr: str = "inherit",
+    stderr: str = "ignore",
     on_event: Optional[EventHandler] = None,
     expect_protocol: int = 1,
     expect_schema_hash: Optional[str] = None,
     startup_timeout: float = 30.0,
 ) -> Sidecar:
-    if stderr not in ("inherit", "devnull"):
-        raise ValueError(f"stderr must be 'inherit' or 'devnull', got {stderr!r}")
-
     resolved = binary if binary is not None else resolve_binary()
-    stderr_target = subprocess.DEVNULL if stderr == "devnull" else None
+    stderr_target = None if stderr_mode(stderr) == "inherit" else subprocess.DEVNULL
 
     full_env: Optional[Dict[str, str]] = None
     if env is not None:

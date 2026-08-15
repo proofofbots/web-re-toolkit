@@ -284,6 +284,13 @@ fn has_params(shape: &Shape) -> bool {
     }
 }
 
+fn resolve<'a>(plan: &'a Plan, shape: &'a Shape) -> &'a Shape {
+    match shape {
+        Shape::Ref { name } => plan.client.types.get(name).unwrap_or(shape),
+        _ => shape,
+    }
+}
+
 fn index_dts(plan: &Plan) -> String {
     let class_name = format!("{}Client", pascal(&plan.client.id));
     let mut out = String::new();
@@ -428,10 +435,67 @@ fn readme(plan: &Plan) -> String {
 
     let call = match first {
         Some(op) if has_params(&op.params) => {
-            format!("const result = await client.{}({});", camel(&op.name), sample(&op.params))
+            format!("const result = await client.{}({});", camel(&op.name), sample(resolve(plan, &op.params)))
         }
         Some(op) => format!("const result = await client.{}();", camel(&op.name)),
         None => "const result = await client.health();".to_string(),
+    };
+
+    let call_options = match first {
+        Some(op) if op.deadline_ms > 0 => {
+            format!("{{ signal: abort.signal, deadlineMs: {} }}", op.deadline_ms)
+        }
+        _ => "{ signal: abort.signal }".to_string(),
+    };
+
+    let call_with_options = match first {
+        Some(op) if has_params(&op.params) => format!(
+            "await client.{}({}, {call_options});",
+            camel(&op.name),
+            sample(resolve(plan, &op.params))
+        ),
+        Some(op) => format!("await client.{}({call_options});", camel(&op.name)),
+        None => "await client.health();".to_string(),
+    };
+
+    let streaming = plan
+        .client
+        .ops
+        .iter()
+        .find(|op| !op.streams.is_empty());
+
+    let events = match (streaming, plan.client.events.first()) {
+        (Some(op), Some(event)) => format!(
+            r#"## Events
+
+`{op_name}` streams `{event_name}` while it runs. A session is not an emitter, so pass `onEvent` when you open the client to see every event, or per call to scope it to one:
+
+```js
+const client = await {class_name}.open({{}}, {{
+  onEvent: (id, event, data) => console.log(event, data),
+}});
+
+await client.{op_camel}({op_sample}, {{
+  onEvent: (id, event, data) => console.log(event, data),
+}});
+```
+
+Declared events: {event_list}.
+
+"#,
+            op_name = op.name,
+            op_camel = camel(&op.name),
+            op_sample = sample(resolve(plan, &op.params)),
+            event_name = event.name,
+            event_list = plan
+                .client
+                .events
+                .iter()
+                .map(|event| format!("`{}`", event.name))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => String::new(),
     };
 
     format!(
@@ -461,6 +525,26 @@ await client.close();
 ```
 
 One client owns one session, which owns the mounted realm. Open it once and reuse it. Opening one per call pays the warmup cost every time.
+
+{events}## Deadlines and cancellation
+
+Every op takes a second options argument: `deadlineMs` caps the call and fails it with `kind === "timeout"`, `signal` takes an `AbortSignal` and fails it with `kind === "cancelled"`. Both stop the work inside the sidecar, they do not only abandon the promise.
+
+```js
+const abort = new AbortController();
+setTimeout(() => abort.abort(), 5000);
+{call_with_options}
+```
+
+## Errors
+
+Every rejection is a `WreError` with a stable `kind`: `bad_input`, `unsupported`, `target_drift`, `blocked`, `timeout`, `cancelled`, `resource`, `protocol`, `internal`. Branch on `kind`, never on the message. `error.retryable` says whether the same call is worth repeating.
+
+## Sidecar output and diagnostics
+
+The sidecar logs to its own stderr, which is discarded by default. Pass `{{ stderr: "inherit" }}` to `open`, or set `WRE_STDERR=inherit`, to see it.
+
+A failing call writes a diagnostic report and puts its path in `error.detail.diagnostics`. `WRE_DIAG=always` records every call, `WRE_DIAG=off` records none, and `await client.diagnose(true)` writes one on demand. Send that file with a bug report.
 
 ## Pinned build
 

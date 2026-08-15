@@ -76,7 +76,7 @@ func main() {
 	clock := int64(1700000000000)
 	seed := int64(7)
 
-	handle, err := client.Open(ctx, &client.ExampleConfig{ClockMs: &clock, Seed: &seed}, client.OpenOptions{Stderr: os.Stderr})
+	handle, err := client.Open(ctx, &client.ExampleConfig{ClockMs: &clock, Seed: &seed}, client.OpenOptions{})
 	if err != nil {
 		fmt.Println("open failed:", err)
 		os.Exit(1)

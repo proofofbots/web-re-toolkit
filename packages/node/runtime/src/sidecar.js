@@ -6,11 +6,16 @@ import { resolveBinary } from "./binary.js";
 const CANCEL_GRACE_MS = 5000;
 const SHUTDOWN_CAP_MS = 5000;
 
+export function stderrMode(requested) {
+  const choice = process.env.WRE_STDERR ?? requested ?? "ignore";
+  return choice === "inherit" ? "inherit" : "ignore";
+}
+
 export async function connect(options = {}) {
   const binary = options.binary ?? resolveBinary();
   const args = options.args ?? [];
   const env = { ...process.env, ...(options.env ?? {}) };
-  const stderrMode = options.stderr === "ignore" ? "ignore" : "inherit";
+  const stderr = stderrMode(options.stderr);
   const expectProtocol = options.expectProtocol ?? 1;
   const expectSchemaHash = options.expectSchemaHash;
   const startupTimeoutMs = options.startupTimeoutMs ?? 30000;
@@ -18,7 +23,7 @@ export async function connect(options = {}) {
   const child = spawn(binary, ["--stdio", ...args], {
     cwd: options.cwd,
     env,
-    stdio: ["pipe", "pipe", stderrMode],
+    stdio: ["pipe", "pipe", stderr],
   });
 
   const sidecar = new Sidecar(child, options.onEvent);

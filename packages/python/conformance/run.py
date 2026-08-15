@@ -54,7 +54,7 @@ def main() -> int:
     passed = 0
     failed = 0
 
-    sidecar = connect(binary=os.environ.get("WRE_BINARY"), stderr="devnull")
+    sidecar = connect(binary=os.environ.get("WRE_BINARY"), stderr="ignore")
 
     try:
         session = sidecar.open(suite["target"], suite.get("config") or {})

@@ -188,6 +188,8 @@ Set `WRE_DIAG=always` to record every call:
 WRE_DIAG=always node app.js
 ```
 
+The host's own log is separate. It goes to the sidecar's stderr, which every binding discards so a library stays quiet inside someone else's process. `WRE_STDERR=inherit` attaches it to the calling process and `WRE_LOG=debug` raises the level.
+
 `wre client diag <path>` reads a report back:
 
 ```bash

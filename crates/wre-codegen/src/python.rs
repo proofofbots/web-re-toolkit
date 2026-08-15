@@ -329,7 +329,7 @@ fn init_py(plan: &Plan) -> String {
     out.push_str("    @classmethod\n");
     let _ = writeln!(
         out,
-        "    def open(cls, config: Optional[{config}] = None, binary: Optional[str] = None, args: Sequence[str] = (), env: Optional[Mapping[str, str]] = None, cwd: Optional[str] = None, stderr: str = \"inherit\", on_event: Optional[Callable[[int, str, dict], None]] = None, check_schema: bool = True, startup_timeout: float = 30.0) -> \"{class}\":",
+        "    def open(cls, config: Optional[{config}] = None, binary: Optional[str] = None, args: Sequence[str] = (), env: Optional[Mapping[str, str]] = None, cwd: Optional[str] = None, stderr: str = \"ignore\", on_event: Optional[Callable[[int, str, dict], None]] = None, check_schema: bool = True, startup_timeout: float = 30.0) -> \"{class}\":",
         config = annotation(&plan.client.config),
     );
     out.push_str("        sidecar = connect(\n");
@@ -446,8 +446,25 @@ fn has_params(shape: &Shape) -> bool {
     }
 }
 
+fn resolve<'a>(plan: &'a Plan, shape: &'a Shape) -> &'a Shape {
+    match shape {
+        Shape::Ref { name } => plan.client.types.get(name).unwrap_or(shape),
+        _ => shape,
+    }
+}
+
 fn annotation(shape: &Shape) -> String {
     py_type(shape)
+}
+
+fn deadline_seconds(deadline_ms: u64) -> String {
+    let ms = if deadline_ms > 0 { deadline_ms } else { 20_000 };
+    let seconds = ms as f64 / 1000.0;
+    if seconds.fract() == 0.0 {
+        format!("{}", seconds as u64)
+    } else {
+        format!("{seconds}")
+    }
 }
 
 fn readme(plan: &Plan) -> String {
@@ -464,10 +481,56 @@ fn readme(plan: &Plan) -> String {
 
     let call = match first {
         Some(op) if has_params(&op.params) => {
-            format!("result = client.{}({})", snake(&op.name), sample(&op.params))
+            format!("result = client.{}({})", snake(&op.name), sample(resolve(plan, &op.params)))
         }
         Some(op) => format!("result = client.{}()", snake(&op.name)),
         None => "result = client.health()".to_string(),
+    };
+
+    let deadline_call = match first {
+        Some(op) if has_params(&op.params) => format!(
+            "client.{}({}, deadline={})",
+            snake(&op.name),
+            sample(resolve(plan, &op.params)),
+            deadline_seconds(op.deadline_ms)
+        ),
+        Some(op) => format!(
+            "client.{}(deadline={})",
+            snake(&op.name),
+            deadline_seconds(op.deadline_ms)
+        ),
+        None => "client.health()".to_string(),
+    };
+
+    let streaming = plan.client.ops.iter().find(|op| !op.streams.is_empty());
+
+    let events = match (streaming, plan.client.events.first()) {
+        (Some(op), Some(event)) => format!(
+            r#"## Events
+
+`{op_name}` streams `{event_name}` while it runs. Pass `on_event` to `open` for every event on the session, or to a single call to scope it:
+
+```python
+with {class}.open(on_event=lambda call_id, event, data: print(event, data)) as client:
+    client.{op_snake}({op_sample}, on_event=lambda call_id, event, data: print(event, data))
+```
+
+Declared events: {event_list}.
+
+"#,
+            op_name = op.name,
+            op_snake = snake(&op.name),
+            op_sample = sample(resolve(plan, &op.params)),
+            event_name = event.name,
+            event_list = plan
+                .client
+                .events
+                .iter()
+                .map(|event| format!("`{}`", event.name))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => String::new(),
     };
 
     format!(
@@ -498,6 +561,24 @@ with {class}.open() as client:
 The client owns one session, which owns the mounted realm. Keep it open and reuse it rather than opening one per call.
 
 For asyncio, wrap the calls with `asyncio.to_thread`, or use `wre_runtime.aio.AsyncSidecar` and attach with `{class}.attach`.
+
+{events}## Deadlines
+
+Every op takes `deadline`, in seconds. Past it the call fails with `wre_runtime.Timeout` and the work stops inside the sidecar.
+
+```python
+{deadline_call}
+```
+
+## Errors
+
+Every failure raises a subclass of `wre_runtime.WreError`: `BadInput`, `Unsupported`, `TargetDrift`, `Blocked`, `Timeout`, `Cancelled`, `ResourceError`, `ProtocolError`, `InternalError`. Catch the class or branch on `error.kind`, never on the message. `error.retryable` says whether repeating the call is worth it.
+
+## Sidecar output and diagnostics
+
+The sidecar logs to its own stderr, which is discarded by default. Pass `stderr="inherit"` to `open`, or set `WRE_STDERR=inherit`, to see it.
+
+A failing call writes a diagnostic report and puts its path in `error.detail["diagnostics"]`. `WRE_DIAG=always` records every call, `WRE_DIAG=off` records none, and `client.diagnose(True)` writes one on demand. Send that file with a bug report.
 
 ## Pinned build
 

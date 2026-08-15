@@ -6,7 +6,7 @@ A binding that follows this protocol works against any bundle.
 
 ## Transport
 
-The consumer spawns `wred --stdio` and speaks frames over its stdin and stdout. Its stderr carries human readable logs (`WRE_LOG` sets the level, default `info`) and is never part of the protocol.
+The consumer spawns `wred --stdio` and speaks frames over its stdin and stdout. Its stderr carries human readable logs (`WRE_LOG` sets the level, default `info`) and is never part of the protocol. Bindings discard that stream by default and attach it to the parent when the caller asks or `WRE_STDERR=inherit` is set.
 
 `wred --socket <path>` serves the same protocol over a Unix domain socket for a shared daemon. There is no TCP listener.
 
@@ -240,7 +240,7 @@ Platform triples are the Rust ones:
 
 ## What a binding must do
 
-- Spawn the binary with `--stdio`, keep stderr attached to the parent unless the caller asks otherwise.
+- Spawn the binary with `--stdio` and discard its stderr unless the caller asks for it, since a library should not write into a host process. Offer one option to attach it to the parent, and let `WRE_STDERR=inherit` or `WRE_STDERR=ignore` override that option.
 - Read frames on a background thread or task and correlate responses by `id`.
 - Send `hello` first and fail on a protocol or schema mismatch.
 - Expose sessions as objects that reuse the connection, and close them on scope exit.

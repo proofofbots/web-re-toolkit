@@ -425,6 +425,45 @@ fn readme(plan: &Plan) -> String {
         None => "result, err := client.Health(ctx)".to_string(),
     };
 
+    let deadline_ms = first.map(|op| op.deadline_ms).filter(|ms| *ms > 0).unwrap_or(20_000);
+    let deadline = if deadline_ms % 1000 == 0 {
+        format!("{}*time.Second", deadline_ms / 1000)
+    } else {
+        format!("{deadline_ms}*time.Millisecond")
+    };
+
+    let streaming = plan.client.ops.iter().find(|op| !op.streams.is_empty());
+
+    let events = match (streaming, plan.client.events.first()) {
+        (Some(op), Some(event)) => format!(
+            r#"## Events
+
+`{op_name}` streams `{event_name}` while it runs. Events arrive on one callback for the whole session, tagged with the call id:
+
+```go
+client, err := {package}.Open(ctx, nil, {package}.OpenOptions{{
+	OnEvent: func(id uint64, event string, data json.RawMessage) {{
+		log.Printf("call %d %s %s", id, event, data)
+	}},
+}})
+```
+
+Declared events: {event_list}.
+
+"#,
+            op_name = op.name,
+            event_name = event.name,
+            event_list = plan
+                .client
+                .events
+                .iter()
+                .map(|event| format!("`{}`", event.name))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => String::new(),
+    };
+
     format!(
         r#"# {module}
 
@@ -458,7 +497,20 @@ if err != nil {{
 fmt.Println(result)
 ```
 
-Check error kinds with `wre.IsKind(err, wre.KindTargetDrift)`.
+Check error kinds with `wre.IsKind(err, wre.KindTargetDrift)`. The kinds are `bad_input`, `unsupported`, `target_drift`, `blocked`, `timeout`, `cancelled`, `resource`, `protocol` and `internal`. Branch on the kind, never on the message.
+
+{events}## Deadlines and cancellation
+
+The context carries the deadline onto the wire, so cancelling it stops the work inside the sidecar rather than only abandoning the call.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), {deadline})
+defer cancel()
+```
+
+## Sidecar output
+
+The sidecar logs to its own stderr, which is discarded by default. Set `OpenOptions.Stderr` to `os.Stderr`, or set `WRE_STDERR=inherit`, to see it.
 
 ## Pinned build
 
@@ -470,7 +522,7 @@ The schema hash is verified during `Connect`. A mismatch means this package and 
 
 ## Diagnostics
 
-`client.Diagnose(ctx, true)` writes one json report with the session's call history, the host facts and the target specific debug section, and returns its path.
+A failing call writes a report and puts its path in the error's detail. `WRE_DIAG=always` records every call, `WRE_DIAG=off` records none, and `client.Diagnose(ctx, true)` writes one on demand with the session's call history, the host facts and the target specific debug section. Send that file with a bug report.
 "#,
         id = plan.client.id,
         summary = summary_line(&plan.client.summary, "No summary was declared for this target."),

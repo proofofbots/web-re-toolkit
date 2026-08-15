@@ -36,8 +36,13 @@ impl SidecarOptions {
             workspace: None,
             events: None,
             startup_timeout: Duration::from_secs(30),
-            inherit_stderr: true,
+            inherit_stderr: false,
         }
+    }
+
+    pub fn inherit_stderr(mut self, inherit: bool) -> Self {
+        self.inherit_stderr = inherit;
+        self
     }
 
     pub fn discover() -> ClientResult<Self> {
@@ -57,6 +62,14 @@ impl SidecarOptions {
     pub fn arg(mut self, value: impl Into<String>) -> Self {
         self.args.push(value.into());
         self
+    }
+}
+
+pub fn inherit_stderr(requested: bool) -> bool {
+    match std::env::var("WRE_STDERR").as_deref() {
+        Ok("inherit") => true,
+        Ok("ignore") => false,
+        _ => requested,
     }
 }
 
@@ -133,7 +146,7 @@ impl Sidecar {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if options.inherit_stderr { Stdio::inherit() } else { Stdio::null() });
+            .stderr(if inherit_stderr(options.inherit_stderr) { Stdio::inherit() } else { Stdio::null() });
 
         let mut child = command.spawn().map_err(|error| {
             ClientError::resource(format!("{} did not start: {error}", options.binary.display()))

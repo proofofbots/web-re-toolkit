@@ -130,7 +130,7 @@ async def connect_async(
     args: Sequence[str] = (),
     env: Optional[Mapping[str, str]] = None,
     cwd: Optional[str] = None,
-    stderr: str = "inherit",
+    stderr: str = "ignore",
     on_event: Optional[EventHandler] = None,
     expect_protocol: int = 1,
     expect_schema_hash: Optional[str] = None,

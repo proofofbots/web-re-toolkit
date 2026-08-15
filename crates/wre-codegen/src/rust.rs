@@ -98,6 +98,7 @@ fn lib_rs(plan: &Plan) -> String {
     out.push_str("    pub workspace: Option<PathBuf>,\n");
     out.push_str("    pub events: Option<EventHandler>,\n");
     out.push_str("    pub check_schema: bool,\n");
+    out.push_str("    pub inherit_stderr: bool,\n");
     out.push_str("    pub startup_timeout: Duration,\n");
     out.push_str("    pub diag: Value,\n");
     out.push_str("}\n\n");
@@ -111,6 +112,7 @@ fn lib_rs(plan: &Plan) -> String {
     out.push_str("            workspace: None,\n");
     out.push_str("            events: None,\n");
     out.push_str("            check_schema: true,\n");
+    out.push_str("            inherit_stderr: false,\n");
     out.push_str("            startup_timeout: Duration::from_secs(30),\n");
     out.push_str("            diag: Value::Null,\n");
     out.push_str("        }\n");
@@ -137,6 +139,7 @@ fn lib_rs(plan: &Plan) -> String {
     out.push_str("        spawn.env = options.env;\n");
     out.push_str("        spawn.workspace = options.workspace;\n");
     out.push_str("        spawn.events = options.events;\n");
+    out.push_str("        spawn.inherit_stderr = options.inherit_stderr;\n");
     out.push_str("        spawn.startup_timeout = options.startup_timeout;\n\n");
     out.push_str("        let sidecar = Sidecar::spawn(spawn)?;\n");
     out.push_str("        let hello = sidecar.hello();\n\n");
@@ -343,6 +346,46 @@ fn readme(plan: &Plan) -> String {
         None => "let result = client.health()?;".to_string(),
     };
 
+    let op_name = first
+        .map(|op| format!("\"{}\"", op.name))
+        .unwrap_or_else(|| "\"health\"".to_string());
+    let params_type = first
+        .filter(|op| has_params(&op.params))
+        .map(|op| rust_type(&op.params))
+        .unwrap_or_else(|| "()".to_string());
+    let deadline = first.map(|op| op.deadline_ms).filter(|ms| *ms > 0).unwrap_or(20_000);
+
+    let streaming = plan.client.ops.iter().find(|op| !op.streams.is_empty());
+
+    let events = match (streaming, plan.client.events.first()) {
+        (Some(op), Some(event)) => format!(
+            r#"## Events
+
+`{stream_op}` streams `{event_name}` while it runs. One handler receives every event on the sidecar, tagged with the call id:
+
+```rust
+let options = OpenOptions {{
+    events: Some(Arc::new(|id, event, data| println!("call {{id}} {{event}} {{data}}"))),
+    ..OpenOptions::default()
+}};
+```
+
+Declared events: {event_list}.
+
+"#,
+            stream_op = op.name,
+            event_name = event.name,
+            event_list = plan
+                .client
+                .events
+                .iter()
+                .map(|event| format!("`{}`", event.name))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => String::new(),
+    };
+
     format!(
         r#"# {name}
 
@@ -365,6 +408,21 @@ client.close()?;
 
 The binary is found through `WRE_BINARY`, then `WRE_WRED`, then `target/release/wred` upward from the working directory, then `PATH`.
 
+{events}## Deadlines and errors
+
+The generated methods call without a deadline. For one with a cap, go through the session:
+
+```rust
+let params = serde_json::to_value(&{params_type}::default())?;
+let value = client.session().call_within({op_name}, params, Duration::from_millis({deadline}))?;
+```
+
+Every failure is a `ClientError` with a stable `kind()`: `bad_input`, `unsupported`, `target_drift`, `blocked`, `timeout`, `cancelled`, `resource`, `protocol`, `internal`. Match on the kind, never on the message.
+
+## Sidecar output
+
+The sidecar logs to its own stderr, which is dropped by default. Set `OpenOptions::inherit_stderr` to `true`, or set `WRE_STDERR=inherit`, to see it.
+
 ## Pinned build
 
 - bundle `{bundle}`
@@ -375,7 +433,7 @@ The binary is found through `WRE_BINARY`, then `WRE_WRED`, then `target/release/
 
 ## Diagnostics
 
-`client.diagnose(true)` writes one json report holding the session's calls, the host facts and the target specific debug section, and returns the path.
+A failing call writes a report and puts its path in the error detail. `WRE_DIAG=always` records every call, `WRE_DIAG=off` records none, and `client.diagnose(true)` writes one on demand holding the session's calls, the host facts and the target specific debug section. Send that file with a bug report.
 "#,
         id = plan.client.id,
         lib = name.replace('-', "_"),

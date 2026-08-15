@@ -70,6 +70,19 @@ type Sidecar struct {
 
 const defaultStartupTimeout = 10 * time.Second
 
+func stderrWriter(requested io.Writer) io.Writer {
+	switch os.Getenv("WRE_STDERR") {
+	case "inherit":
+		return os.Stderr
+	case "ignore":
+		return io.Discard
+	}
+	if requested == nil {
+		return io.Discard
+	}
+	return requested
+}
+
 func Connect(ctx context.Context, opts Options) (*Sidecar, error) {
 	if opts.Binary == "" {
 		return nil, newError(KindBadInput, "Options.Binary is required")
@@ -90,11 +103,7 @@ func Connect(ctx context.Context, opts Options) (*Sidecar, error) {
 	if len(opts.Env) > 0 {
 		cmd.Env = opts.Env
 	}
-	stderr := opts.Stderr
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	cmd.Stderr = stderr
+	cmd.Stderr = stderrWriter(opts.Stderr)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
