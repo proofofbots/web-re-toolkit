@@ -1,0 +1,30 @@
+{
+  "sha256": "9efa368a91e3b314f130aeb951166ef9cb20a1cc5c35817f8c1e43723437f823",
+  "sha512_cost7": "2189ba1de0f4cb9672c9a3b5800b64e70778974a5750396f336e70eac17a9ddc54a6d38291053e88b20a9eb486accab7607837311f61ca09ca02e26ddc570bd7",
+  "sha256_cost3_len16": "996d1500947654f0f314ce9c2f297129",
+  "v1_sha256": "f4cb24d4a5bffabadd37c4ce3cfb5246adc8f2cb88e3e49497f0b3c3af90ffaf",
+  "v1_signature": "c053bcd07083810a8a9412efb35168a56b6a2d8ca03bbe9e52ceceb69f591d9a",
+  "pbkdf2_sha256_5000": "83155c14e20e4f11e77e971f5b8d6a88a42a943262b61be4658e37df833d058c",
+  "pbkdf2_sha512_1000_len16": "66fd5c968999090fe908437f7b3f9383",
+  "scrypt_1024_8_1": "1f243938c54c93d41ae23c3f6a1f53392bf8e2723d95c7437b2800bb41392a5c",
+  "argon2id_t2_m1024_p1": "30b539f9ed26ffda3cda0dbe5f927522ec5af27bcb479c82a9af9ddc22768b2c",
+  "canonical": "{\"algorithm\":\"SHA-256\",\"cost\":100,\"expiresAt\":1700000000,\"keyLength\":32,\"keyPrefix\":\"abababababababababababababababab\",\"nonce\":\"000102030405060708090a0b0c0d0e0f\",\"salt\":\"aabbccddeeff00112233445566778899\"}",
+  "canonical_signature": "db78e461a9f9f24da00002946ce05c3d2557f78cfa90ad27302713862658ad34",
+  "challenge": {
+    "parameters": {
+      "algorithm": "SHA-256",
+      "cost": 10,
+      "keyLength": 32,
+      "keyPrefix": "a9a9e81c084ad44c25351c5f5568ce22",
+      "nonce": "9295b841727d48460ca4b4954584a14f",
+      "salt": "b83df484bc74cdde5caad7992284ca01"
+    },
+    "signature": "b3aeb49b8a27accf753a38d53e180ce8aaf6cacf72480719f4872d884574a168"
+  },
+  "challenge_solution": {
+    "counter": 37,
+    "derivedKey": "a9a9e81c084ad44c25351c5f5568ce22229214aa726b13edb33baa9675fee5b3"
+  },
+  "obfuscated": "eyJwYXJhbWV0ZXJzIjp7ImFsZ29yaXRobSI6IlBCS0RGMi9TSEEtMjU2IiwiY29zdCI6MjAwLCJrZXlMZW5ndGgiOjMyLCJrZXlQcmVmaXgiOiI5YzEyNDEyM2VlZTM5ZmU2ZmE0N2ZjMGY1NDk5NWQyNiIsIm5vbmNlIjoiOTUwNWNkNzljMjFkMmEwMzIwZWJiN2ZmMGEzZmM3ZmYiLCJzYWx0IjoiNmNiMDllMGUyZjc1MWUxYTMwOWY3MzZiODFjZmM1YjAifSwiY2lwaGVyIjp7Iml2IjoiOTk4MTBlYmFiZmRlNGE1ZTg2NjYxN2M1IiwiZGF0YSI6Ijc3ZWE0MDg2OTlmODU1ZDYwYzQwOGFkNzQ4NWI5NWVjMmZkMDJjNWJmMzg4NDc2YTI0ODgzMDgzZmY0M2Q4ODM5M2JkMjJkMzE3Y2MwYTI5MGMifX0=",
+  "server_signature_payload": "eyJhbGdvcml0aG0iOiJTSEEtMjU2IiwidmVyaWZpY2F0aW9uRGF0YSI6ImNsYXNzaWZpY2F0aW9uPUdPT0QmZW1haWw9dXNlciU0MGV4YW1wbGUuY29tJmV4cGlyZT00MTAyNDQ0ODAwJmZpZWxkcz1lbWFpbCUyQ25hbWUmZmllbGRzSGFzaD1mMmM3MzUyNDAwMDM5ZmQ5MzBiNTlkMzY5ZTgxZTEzMjlhMjg0ZDJmM2M0YzI1OTEwZWQ2YTgyMDhiM2Q1MTEyJnNjb3JlPTEuNCZ0aW1lPTE3MDAwMDAwMDAmdmVyaWZpZWQ9dHJ1ZSIsInNpZ25hdHVyZSI6ImE4MzYwZTkzMTE5OWZhYmNkZjQ3ODhjMDc3YzY5ZmNjMjQ0YTIzOGFiMzk3MDgwY2QzNTMyZWI5ZDQyODk2NGYiLCJ2ZXJpZmllZCI6dHJ1ZX0="
+}

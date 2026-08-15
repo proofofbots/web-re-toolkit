@@ -1,0 +1,25 @@
+[package]
+name = "wre-client-altcha"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Solves ALTCHA proof-of-work challenges without a browser"
+
+[dependencies]
+wre-client.workspace = true
+wre-core.workspace = true
+
+aes-gcm.workspace = true
+argon2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+rayon.workspace = true
+scrypt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+url.workspace = true

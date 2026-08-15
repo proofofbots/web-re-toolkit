@@ -24,10 +24,13 @@ wre-variants = { path = "crates/wre-variants", version = "0.1.0" }
 wre-report = { path = "crates/wre-report", version = "0.1.0" }
 wre-target = { path = "crates/wre-target", version = "0.1.0" }
 wre-client = { path = "crates/wre-client", version = "0.1.0" }
+wre-client-altcha = { path = "clients/altcha", version = "0.1.0" }
 wre-codegen = { path = "crates/wre-codegen", version = "0.1.0" }
 wre-client-example = { path = "clients/example", version = "0.1.0" }
 
+aes-gcm = "0.11.0"
 anyhow = "1.0.104"
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
 base64 = "0.23.1"
 bitflags = "2.13.1"
 byteorder = "1.5.0"
@@ -37,8 +40,10 @@ crc32fast = "1.5.0"
 flate2 = "1.1.9"
 futures-util = "0.3.34"
 hex = "0.4.3"
+hmac = "0.13.0"
 indexmap = { version = "2.14.0", features = ["serde"] }
 md-5 = "0.11.0"
+pbkdf2 = "0.13.0"
 percent-encoding = "2.3.2"
 pulldown-cmark = "0.13.4"
 rand = "0.10.2"
@@ -46,6 +51,7 @@ rayon = "1.12.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "http2", "json", "gzip", "brotli", "deflate", "socks", "stream", "charset"] }
 rustls = "0.23.43"
+scrypt = { version = "0.12.0", default-features = false, features = ["kdf"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 sha1 = "0.11.0"

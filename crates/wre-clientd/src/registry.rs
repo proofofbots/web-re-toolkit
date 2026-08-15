@@ -11,5 +11,8 @@ pub fn build() -> Result<Registry, String> {
     #[cfg(feature = "target-example")]
     registry.register(wre_client_example::registration())?;
 
+    #[cfg(feature = "target-altcha")]
+    registry.register(wre_client_altcha::registration())?;
+
     Ok(registry)
 }

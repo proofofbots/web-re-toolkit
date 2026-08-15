@@ -18,7 +18,7 @@ wre client new acme --summary "Seals payloads for acme"
 
 This writes `clients/acme` with a skeleton, adds a conformance suite stub, and wires the crate into `wred` behind a `target-acme` feature. The skeleton's `solve` returns `unsupported` until you write it.
 
-`clients/example` mounts a script in a V8 realm, finds its primitives by signature, and seals a payload with them.
+`clients/example` mounts a script in a V8 realm, finds its primitives by signature, and seals a payload with them. `clients/altcha` is the first real target: it needs no realm, ports the target's four key derivations to Rust, and is cross-checked against values the widget's own code produced ([docs/research/altcha.md](research/altcha.md)).
 
 **A descriptor.** It names the ops, their parameter and result shapes, config shape, events and capabilities. See the shape table in `docs/PROTOCOL.md`.
 

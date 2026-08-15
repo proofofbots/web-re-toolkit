@@ -88,6 +88,13 @@ A session owns the mounted realm and the cookies, so a caller opens one and reus
 
 [docs/CLIENTS.md](docs/CLIENTS.md) is the authoring guide. [docs/PROTOCOL.md](docs/PROTOCOL.md) is the wire contract.
 
+## Targets
+
+| target | adapter | client | research |
+| --- | --- | --- | --- |
+| altcha | `targets/altcha.toml` | `clients/altcha` | [docs/research/altcha.md](docs/research/altcha.md) |
+| example | `targets/example.toml` | `clients/example` | a worked adapter, not a real service |
+
 ## Core ideas
 
 **Borrow, do not reimplement.** A target's crypto is already written and already correct. `wre-live` mounts the shipped script in a V8 realm and hands you its own functions as callable handles, so your decoder cannot drift from the build. Roles are matched by a regex against each top-level function's source, declared in the manifest.

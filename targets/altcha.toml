@@ -1,0 +1,142 @@
+name = "altcha"
+description = "ALTCHA, an open source proof-of-work captcha widget, v3 with the legacy v1 challenge format"
+urls = ["https://altcha.org/", "https://playground.altcha.org/"]
+
+[pages]
+playground = "https://playground.altcha.org/#/widget"
+docs = "https://altcha.org/docs/v2/website-integration/"
+
+[discovery]
+script_patterns = [
+  'src="([^"]*altcha(?:\.umd|\.min)?\.js[^"]*)"',
+  'src="([^"]*/altcha@[^"]*)"',
+]
+endpoint_patterns = [
+  'challengeurl="([^"]+)"',
+  'verifyurl="([^"]+)"',
+  '/altcha/challenge',
+  '/api/altcha[a-z/-]*',
+]
+cookie_names = ["altcha"]
+header_names = ["x-altcha-config"]
+document_markers = ["altcha-widget", "$altcha", "data-obfuscated"]
+
+[deobfuscate]
+source_kind = "module"
+max_sweeps = 4
+rename = true
+infer_names = true
+remove_unused = false
+inline_global_aliases = true
+aggressive_member_access = false
+drop_debugger = false
+
+[live]
+tolerate_throw = true
+clock_ms = 1700000000000.0
+random_seed = 1
+
+[[live.signatures]]
+role = "hexToBuffer"
+pattern = "Hex string must have an even length"
+params = 1
+
+[[live.signatures]]
+role = "bufferToHex"
+pattern = "padStart\\(\\s*2\\s*,"
+params = 1
+
+[[live.signatures]]
+role = "solveChallenge"
+pattern = "counterStart|counterStep"
+
+[[live.signatures]]
+role = "deriveKey"
+pattern = "PBKDF2/SHA-512"
+
+[live.exports]
+algorithms = "globalThis.$altcha && Array.from(globalThis.$altcha.algorithms.keys())"
+defaults = "globalThis.$altcha && globalThis.$altcha.defaults"
+
+[wire]
+codec = "base64-json"
+request_patterns = ['/altcha/verify', '/api/altcha[a-z/-]*']
+
+[wire.field_labels]
+"challenge.parameters.algorithm" = "key derivation function"
+"challenge.parameters.cost" = "iterations per candidate"
+"challenge.parameters.keyPrefix" = "the prefix the derived key must start with"
+"challenge.parameters.nonce" = "per challenge nonce, the counter is appended to it"
+"challenge.parameters.salt" = "per challenge salt"
+"challenge.signature" = "hmac over the canonical parameters, keyed by the server secret"
+"solution.counter" = "the answer, the counter that produced the prefix"
+"solution.derivedKey" = "the full derived key, re-derived by the server"
+"solution.time" = "wall clock the widget spent solving"
+"number" = "v1 answer, the number appended to the salt"
+"salt" = "v1 salt with its expiry query string"
+
+[probe]
+preset = "fingerprint"
+network = true
+workers = true
+events = ["pointermove", "pointerdown", "touchmove", "scroll", "focusin", "keydown"]
+
+[[probe.methods]]
+holder = "SubtleCrypto.prototype"
+method = "digest"
+label = "sha proof of work"
+
+[[probe.methods]]
+holder = "SubtleCrypto.prototype"
+method = "deriveKey"
+label = "pbkdf2 proof of work"
+
+[[probe.methods]]
+holder = "SubtleCrypto.prototype"
+method = "importKey"
+label = "pbkdf2 password import"
+
+[[probe.properties]]
+holder = "Navigator.prototype"
+property = "hardwareConcurrency"
+label = "worker count the widget spawns"
+
+[[probe.properties]]
+holder = "Navigator.prototype"
+property = "maxTouchPoints"
+label = "reported in the interaction signature"
+
+[[knobs]]
+name = "hardware-concurrency-2"
+group = "cpu"
+note = "changes how many workers split the counter space, which moves solution.time only"
+inject = "Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', { get: function () { return 2; }, configurable: true });"
+
+[[knobs]]
+name = "touch-device"
+group = "input"
+note = "moves maxTouchPoints and routes pointer samples into the touch array of the interaction signature"
+
+[[knobs.emulation]]
+method = "Emulation.setTouchEmulationEnabled"
+params = { enabled = true, maxTouchPoints = 5 }
+
+[[knobs.emulation]]
+method = "Emulation.setDeviceMetricsOverride"
+params = { width = 390, height = 844, deviceScaleFactor = 3.0, mobile = true, screenWidth = 390, screenHeight = 844 }
+
+[[knobs]]
+name = "webdriver-true"
+group = "automation"
+note = "the widget itself reads no automation flag, this is the control that proves it"
+inject = "Object.defineProperty(Navigator.prototype, 'webdriver', { get: function () { return true; }, configurable: true });"
+
+[[checks]]
+name = "payload round trips"
+kind = "roundtrip"
+note = "the base64 json form value decodes and re-encodes byte for byte"
+
+[[checks]]
+name = "primitives mount"
+kind = "mount"
+note = "the hex helpers, the solver and the derivation function are still findable in the shipped bundle"
