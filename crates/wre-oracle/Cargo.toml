@@ -1,0 +1,14 @@
+[package]
+name = "wre-oracle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Find the response feature that reflects payload state, and grade a built payload against real ones"
+
+[dependencies]
+wre-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
