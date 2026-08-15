@@ -1,0 +1,27 @@
+[package]
+name = "wre-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Custom VM workbench: handler probing, instruction IR, control flow recovery and a lifter to readable JavaScript"
+
+[dependencies]
+wre-core.workspace = true
+wre-js.workspace = true
+wre-live.workspace = true
+
+anyhow.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
