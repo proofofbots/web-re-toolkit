@@ -14,6 +14,7 @@ pub enum Operand {
     Null,
     Undefined,
     Register { index: u32 },
+    Stack { depth: u32 },
     Address { pc: usize },
     Scope { depth: u32, slot: u32 },
     Opaque { note: String },
@@ -29,6 +30,7 @@ impl Operand {
             Operand::Null => "null".to_string(),
             Operand::Undefined => "undefined".to_string(),
             Operand::Register { index } => format!("r{index}"),
+            Operand::Stack { depth } => format!("stack[-{depth}]"),
             Operand::Address { pc } => format!("@{pc}"),
             Operand::Scope { depth, slot } => format!("scope[{depth}][{slot}]"),
             Operand::Opaque { note } => format!("<{note}>"),
@@ -69,6 +71,10 @@ pub enum OpKind {
     MakeClosure,
     MakeObject,
     MakeArray,
+    Push,
+    Pop,
+    Dup,
+    Swap,
     Jump,
     Branch,
     Return,
@@ -83,12 +89,63 @@ impl OpKind {
         matches!(self, OpKind::Return | OpKind::Throw | OpKind::Halt | OpKind::Jump)
     }
 
+    pub fn touches_stack(&self) -> bool {
+        matches!(self, OpKind::Push | OpKind::Pop | OpKind::Dup | OpKind::Swap)
+    }
+
+    pub fn stack_delta(&self) -> i32 {
+        match self {
+            OpKind::Push | OpKind::Dup => 1,
+            OpKind::Pop => -1,
+            _ => 0,
+        }
+    }
+
     pub fn name(&self) -> String {
         match self {
             OpKind::Binary { operator } => format!("binary {operator}"),
             OpKind::Unary { operator } => format!("unary {operator}"),
             other => format!("{other:?}").to_lowercase(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Guarded {
+    #[default]
+    Catch,
+    Finally,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Region {
+    pub start: usize,
+    pub end: usize,
+    pub target: usize,
+    #[serde(default)]
+    pub kind: Guarded,
+}
+
+impl Region {
+    pub fn new(start: usize, end: usize, target: usize) -> Self {
+        Self { start, end, target, kind: Guarded::Catch }
+    }
+
+    pub fn finally(start: usize, end: usize, target: usize) -> Self {
+        Self { start, end, target, kind: Guarded::Finally }
+    }
+
+    pub fn covers(&self, pc: usize) -> bool {
+        pc >= self.start && pc < self.end
+    }
+
+    pub fn render(&self) -> String {
+        let word = match self.kind {
+            Guarded::Catch => "catch",
+            Guarded::Finally => "finally",
+        };
+        format!("@{}..@{} {word} @{}", self.start, self.end, self.target)
     }
 }
 
@@ -207,6 +264,8 @@ pub struct VmProgram {
     #[serde(default)]
     pub handler_labels: BTreeMap<u32, String>,
     #[serde(default)]
+    pub regions: Vec<Region>,
+    #[serde(default)]
     pub notes: Vec<String>,
 }
 
@@ -224,8 +283,32 @@ impl VmProgram {
             entry,
             pool: Vec::new(),
             handler_labels: BTreeMap::new(),
+            regions: Vec::new(),
             notes: Vec::new(),
         }
+    }
+
+    pub fn guarding(&self, pc: usize) -> Vec<&Region> {
+        self.regions
+            .iter()
+            .filter(|region| region.covers(pc))
+            .collect()
+    }
+
+    pub fn handler_targets(&self, pc: usize) -> Vec<usize> {
+        self.guarding(pc).into_iter().map(|region| region.target).collect()
+    }
+
+    pub fn successors_of(&self, pc: usize, instruction: &Instruction) -> Vec<usize> {
+        let mut out = instruction.successors();
+
+        for target in self.handler_targets(pc) {
+            if !out.contains(&target) {
+                out.push(target);
+            }
+        }
+
+        out
     }
 
     pub fn get(&self, pc: usize) -> Option<&Instruction> {
@@ -257,7 +340,7 @@ impl VmProgram {
                 continue;
             };
 
-            for successor in instruction.successors() {
+            for successor in self.successors_of(pc, instruction) {
                 if self.instructions.contains_key(&successor) {
                     stack.push(successor);
                 }
@@ -395,6 +478,99 @@ pub fn carve_functions(program: &VmProgram) -> Vec<FunctionRange> {
     }
 
     out
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    fn program() -> VmProgram {
+        let mut instructions = Vec::new();
+        for pc in 0..6 {
+            let mut instruction = Instruction::new(pc, pc as u32, pc + 1);
+            instruction.kind = OpKind::Nop;
+            instructions.push(instruction);
+        }
+
+        let mut last = Instruction::new(6, 6, 7);
+        last.kind = OpKind::Return;
+        last.terminal = true;
+        instructions.push(last);
+
+        let mut program = VmProgram::from_instructions(instructions);
+        program.regions.push(Region::new(1, 4, 6));
+        program
+    }
+
+    #[test]
+    fn a_region_covers_a_half_open_range() {
+        let region = Region::new(1, 4, 6);
+
+        assert!(!region.covers(0));
+        assert!(region.covers(1));
+        assert!(region.covers(3));
+        assert!(!region.covers(4));
+    }
+
+    #[test]
+    fn only_guarded_addresses_reach_the_handler() {
+        let program = program();
+
+        assert_eq!(program.handler_targets(2), vec![6]);
+        assert!(program.handler_targets(5).is_empty());
+        assert_eq!(program.guarding(2).len(), 1);
+    }
+
+    #[test]
+    fn a_guarded_instruction_gains_the_handler_as_a_successor() {
+        let program = program();
+        let instruction = program.get(2).unwrap();
+
+        assert_eq!(instruction.successors(), vec![3]);
+        assert_eq!(program.successors_of(2, instruction), vec![3, 6]);
+    }
+
+    #[test]
+    fn nested_regions_both_apply() {
+        let mut program = program();
+        program.regions.push(Region::finally(2, 3, 5));
+
+        let targets = program.handler_targets(2);
+        assert!(targets.contains(&6));
+        assert!(targets.contains(&5));
+    }
+
+    #[test]
+    fn a_region_describes_itself() {
+        assert_eq!(Region::new(1, 4, 9).render(), "@1..@4 catch @9");
+        assert_eq!(Region::finally(1, 4, 9).render(), "@1..@4 finally @9");
+    }
+
+    #[test]
+    fn stack_operations_declare_their_effect_on_depth() {
+        assert_eq!(OpKind::Push.stack_delta(), 1);
+        assert_eq!(OpKind::Dup.stack_delta(), 1);
+        assert_eq!(OpKind::Pop.stack_delta(), -1);
+        assert_eq!(OpKind::Swap.stack_delta(), 0);
+        assert_eq!(OpKind::Nop.stack_delta(), 0);
+
+        assert!(OpKind::Push.touches_stack());
+        assert!(!OpKind::Move.touches_stack());
+    }
+
+    #[test]
+    fn a_stack_operand_renders_by_depth() {
+        assert_eq!(Operand::Stack { depth: 2 }.render(), "stack[-2]");
+    }
+
+    #[test]
+    fn a_program_with_regions_round_trips_through_json() {
+        let program = program();
+        let text = serde_json::to_string(&program).unwrap();
+        let back: VmProgram = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(back.regions, program.regions);
+    }
 }
 
 #[cfg(test)]

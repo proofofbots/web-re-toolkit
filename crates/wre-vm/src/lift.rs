@@ -80,7 +80,7 @@ impl<'p> Lifter<'p> {
         }
 
         let registers = self.registers_used(&cfg);
-        let declaration = if registers.is_empty() {
+        let mut declaration = if registers.is_empty() {
             String::new()
         } else {
             let names: Vec<String> = registers
@@ -89,6 +89,10 @@ impl<'p> Lifter<'p> {
                 .collect();
             format!("  let {};\n", names.join(", "))
         };
+
+        if self.uses_stack(&cfg) {
+            declaration.push_str("  const stack = [];\n");
+        }
 
         let body = if self.options.mode == LiftMode::Dispatch || !cfg.is_reducible() {
             self.report.dispatched += 1;
@@ -111,6 +115,16 @@ impl<'p> Lifter<'p> {
             "function {}_{entry}() {{\n{declaration}{body}}}",
             self.options.function_prefix
         )
+    }
+
+    fn uses_stack(&self, cfg: &Cfg) -> bool {
+        cfg.blocks.iter().any(|block| {
+            block.addresses.iter().any(|pc| {
+                self.program
+                    .get(*pc)
+                    .is_some_and(|instruction| instruction.kind.touches_stack())
+            })
+        })
     }
 
     fn registers_used(&self, cfg: &Cfg) -> BTreeSet<u32> {
@@ -215,6 +229,16 @@ impl<'p> Lifter<'p> {
         let statement = match &instruction.kind {
             OpKind::Nop => None,
             OpKind::Jump | OpKind::Branch => None,
+            OpKind::Push => {
+                let value = operands.first().cloned().unwrap_or_else(|| "undefined".into());
+                Some(format!("stack.push({value});"))
+            }
+            OpKind::Pop => Some(assign("stack.pop()".to_string())),
+            OpKind::Dup => Some("stack.push(stack[stack.length - 1]);".to_string()),
+            OpKind::Swap => Some(
+                "stack.splice(stack.length - 2, 2, stack[stack.length - 1], stack[stack.length - 2]);"
+                    .to_string(),
+            ),
             OpKind::LoadConst | OpKind::Move => {
                 Some(assign(operands.first().cloned().unwrap_or_else(|| "undefined".into())))
             }

@@ -50,7 +50,7 @@ impl Cfg {
             let Some(instruction) = program.get(*pc) else {
                 continue;
             };
-            for successor in instruction.successors() {
+            for successor in program.successors_of(*pc, instruction) {
                 if reachable.contains(&successor) {
                     *predecessors.entry(successor).or_insert(0) += 1;
                 }
@@ -66,7 +66,7 @@ impl Cfg {
             };
 
             let next_in_order = following.get(pc).copied();
-            let successors = instruction.successors();
+            let successors = program.successors_of(*pc, instruction);
 
             for successor in &successors {
                 if !reachable.contains(successor) {
@@ -124,7 +124,7 @@ impl Cfg {
             by_address.insert(pc, block.id);
             block.addresses.push(pc);
 
-            let successors = instruction.successors();
+            let successors = program.successors_of(pc, instruction);
             let next_in_order = following.get(&pc).copied();
 
             let ends_block = instruction.terminal
