@@ -9,7 +9,7 @@ platforms = [
 ]
 
 [package]
-version = "0.1.0"
+version = "0.2.0"
 node_scope = "@proofofbot"
 python_prefix = "wre-"
 go_module = "github.com/proofofbots/web-re-toolkit/packages/go/clients"
@@ -17,6 +17,6 @@ rust_prefix = "wre-sdk-"
 license = "MIT"
 repository = "https://github.com/proofofbots/web-re-toolkit"
 download_url = "https://github.com/proofofbots/web-re-toolkit/releases/download/v{version}/wred-{triple}"
-node_runtime = "^0.1.0"
-python_runtime = ">=0.1.0"
+node_runtime = "^0.2.0"
+python_runtime = ">=0.2.0"
 go_runtime = "github.com/proofofbots/web-re-toolkit/packages/go/wre v0.1.0"
