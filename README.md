@@ -1,6 +1,45 @@
-# web-re-toolkit
+<h1 align="center">web-re-toolkit</h1>
 
-A Rust toolkit for reverse engineering client-side web protections. Record a browser run, deobfuscate the shipped script, call the script's own primitives, lift its virtual machine to readable JavaScript, and attribute wire fields to the environment facts that move them.
+<h3 align="center">An Akamai Bot Manager client that runs without a browser, and the reversing toolkit it was built with</h3>
+
+<p align="center">
+  <b>V2 and V3 sensors, the pixel challenge, and the session cookies, out of a small V8 sandbox instead of Chrome.</b>
+</p>
+
+<p align="center">
+  <b><a href="https://proofofbots.github.io/web-re-toolkit/packages/">Install the client</a></b> ·
+  <b><a href="https://proofofbots.github.io/web-re-toolkit/guides/akamai/">How it works</a></b> ·
+  <a href="https://proofofbots.github.io/web-re-toolkit/">Docs</a> ·
+  <a href="https://discord.gg/nbBePnsa9">Discord</a>
+</p>
+
+---
+
+| | |
+| --- | --- |
+| [**Akamai, solved headlessly**](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | V2 and V3 sensors, the pixel challenge, the proof of work, `_abck` and the cookie jar |
+| [**No browser**](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | a V8 realm with a native browser surface, not Chrome, not Puppeteer, not a DOM shim |
+| [**Nothing reimplemented**](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | the vendor's own sensor script computes the payload, so a rebuild does not break the client |
+| [**Real devices, not generated values**](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | profiles captured off actual browsers with `wre sandbox capture` |
+| [**Browser transport**](https://proofofbots.github.io/web-re-toolkit/guides/clients/) | matching TLS and HTTP/2 fingerprints, header order, SOCKS5 with session rotation |
+| [**node, python, go, rust**](https://proofofbots.github.io/web-re-toolkit/packages/) | one compiled binary, four generated packages, same protocol |
+
+```js
+import { AkamaiClient } from "@proofofbot/client-akamai";
+
+const client = await AkamaiClient.open({ page_url: "https://login.example.com/" });
+
+await client.solve({});
+const answered = await client.request({ url: "https://api.example.com/orders", telemetry: true });
+
+await client.close();
+```
+
+[Packages](https://proofofbots.github.io/web-re-toolkit/packages/) has the same run in python, go and rust.
+
+## The toolkit
+
+The client is one output of a Rust toolkit for reverse engineering client-side web protections. Record a browser run, deobfuscate the shipped script, call the script's own primitives, lift its virtual machine to readable JavaScript, and attribute wire fields to the environment facts that move them.
 
 Everything target-specific lives in one manifest. Everything else is shared library code.
 
