@@ -6,6 +6,7 @@ use wre_client::spec::OpSpec;
 use wre_core::error::Result;
 
 use crate::names::{binary_name, camel, npm_platform, pascal};
+use crate::reference::{self, Sample, Style, Words};
 use crate::{Language, Plan, copy_binary, json_string, summary_line, write};
 
 pub fn emit(plan: &Plan) -> Result<Vec<PathBuf>> {
@@ -423,15 +424,28 @@ fn ts_type(shape: &Shape) -> String {
     }
 }
 
+fn style<'a>() -> Style<'a> {
+    Style {
+        type_name: &ts_type,
+        signature: &|op: &OpSpec| {
+            if has_params(&op.params) {
+                format!("`client.{}(params, options)`", camel(&op.name))
+            } else {
+                format!("`client.{}(options)`", camel(&op.name))
+            }
+        },
+        words: Words { truth: "true", falsehood: "false" },
+    }
+}
+
 fn readme(plan: &Plan) -> String {
     let class_name = format!("{}Client", pascal(&plan.client.id));
     let package = package_name(plan);
-    let first = plan
-        .client
-        .ops
-        .iter()
-        .find(|op| has_params(&op.params))
-        .or_else(|| plan.client.ops.first());
+    let style = style();
+    let notes = reference::notes_section(plan);
+    let config = reference::config_section(plan, &style);
+    let operations = reference::operations_section(plan, &style);
+    let first = reference::primary_op(plan, &has_params);
 
     let call = match first {
         Some(op) if has_params(&op.params) => {
@@ -480,20 +494,13 @@ await client.{op_camel}({op_sample}, {{
 }});
 ```
 
-Declared events: {event_list}.
-
+{event_table}
 "#,
             op_name = op.name,
             op_camel = camel(&op.name),
             op_sample = sample(resolve(plan, &op.params)),
             event_name = event.name,
-            event_list = plan
-                .client
-                .events
-                .iter()
-                .map(|event| format!("`{}`", event.name))
-                .collect::<Vec<_>>()
-                .join(", "),
+            event_table = reference::events_table(plan, &style),
         ),
         _ => String::new(),
     };
@@ -526,7 +533,7 @@ await client.close();
 
 One client owns one session, which owns the mounted realm. Open it once and reuse it. Opening one per call pays the warmup cost every time.
 
-{events}## Deadlines and cancellation
+{notes}{config}{operations}{events}## Deadlines and cancellation
 
 Every op takes a second options argument: `deadlineMs` caps the call and fails it with `kind === "timeout"`, `signal` takes an `AbortSignal` and fails it with `kind === "cancelled"`. Both stop the work inside the sidecar, they do not only abandon the promise.
 
@@ -563,31 +570,27 @@ The schema hash is checked at connect time. A mismatch means this package and th
 }
 
 fn sample(shape: &Shape) -> String {
-    match shape {
-        Shape::Object { fields, .. } => {
-            let mut parts = Vec::new();
-            for entry in fields.iter().filter(|entry| entry.required()).take(3) {
-                parts.push(format!("{}: {}", quote_key(&entry.name), sample_value(&entry.shape)));
-            }
-            format!("{{ {} }}", parts.join(", "))
-        }
-        _ => "{}".to_string(),
+    let fields = reference::example_params(shape);
+    if fields.is_empty() {
+        return "{}".to_string();
     }
+
+    let parts: Vec<String> = fields
+        .iter()
+        .map(|(name, value)| format!("{}: {}", quote_key(name), sample_value(value)))
+        .collect();
+
+    format!("{{ {} }}", parts.join(", "))
 }
 
-fn sample_value(shape: &Shape) -> String {
-    match shape {
-        Shape::Bool => "true".to_string(),
-        Shape::Int | Shape::Float => "1".to_string(),
-        Shape::Str => "\"...\"".to_string(),
-        Shape::Bytes => "\"\"".to_string(),
-        Shape::List { .. } => "[]".to_string(),
-        Shape::Map { .. } | Shape::Object { .. } | Shape::Ref { .. } => "{}".to_string(),
-        Shape::Optional { of } => sample_value(of),
-        Shape::Enum { variants, .. } => variants
-            .first()
-            .map(|item| json_string(item))
-            .unwrap_or_else(|| "\"\"".to_string()),
-        _ => "null".to_string(),
+fn sample_value(sample: &Sample) -> String {
+    match sample {
+        Sample::Bool(true) => "true".to_string(),
+        Sample::Bool(false) => "false".to_string(),
+        Sample::Number(text) => text.clone(),
+        Sample::Text(text) => json_string(text),
+        Sample::List => "[]".to_string(),
+        Sample::Map => "{}".to_string(),
+        Sample::Null => "null".to_string(),
     }
 }

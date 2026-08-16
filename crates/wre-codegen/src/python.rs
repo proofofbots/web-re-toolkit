@@ -6,6 +6,7 @@ use wre_client::spec::OpSpec;
 use wre_core::error::Result;
 
 use crate::names::{binary_name, pascal, snake, wheel_platform};
+use crate::reference::{self, Sample, Style, Words};
 use crate::{Language, Plan, copy_binary, json_string, summary_line, write};
 
 pub fn emit(plan: &Plan) -> Result<Vec<PathBuf>> {
@@ -484,17 +485,30 @@ fn deadline_seconds(deadline_ms: u64) -> String {
     }
 }
 
+fn style<'a>() -> Style<'a> {
+    Style {
+        type_name: &py_type,
+        signature: &|op: &OpSpec| {
+            if has_params(&op.params) {
+                format!("`client.{}(params, deadline=None)`", snake(&op.name))
+            } else {
+                format!("`client.{}(deadline=None)`", snake(&op.name))
+            }
+        },
+        words: Words { truth: "True", falsehood: "False" },
+    }
+}
+
 fn readme(plan: &Plan) -> String {
     let class = class_name(plan);
     let distribution = distribution(plan);
     let package = package_dir(plan);
+    let style = style();
+    let notes = reference::notes_section(plan);
+    let config = reference::config_section(plan, &style);
+    let operations = reference::operations_section(plan, &style);
 
-    let first = plan
-        .client
-        .ops
-        .iter()
-        .find(|op| has_params(&op.params))
-        .or_else(|| plan.client.ops.first());
+    let first = reference::primary_op(plan, &has_params);
 
     let call = match first {
         Some(op) if has_params(&op.params) => {
@@ -532,20 +546,13 @@ with {class}.open(on_event=lambda call_id, event, data: print(event, data)) as c
     client.{op_snake}({op_sample}, on_event=lambda call_id, event, data: print(event, data))
 ```
 
-Declared events: {event_list}.
-
+{event_table}
 "#,
             op_name = op.name,
             op_snake = snake(&op.name),
             op_sample = sample(resolve(plan, &op.params)),
             event_name = event.name,
-            event_list = plan
-                .client
-                .events
-                .iter()
-                .map(|event| format!("`{}`", event.name))
-                .collect::<Vec<_>>()
-                .join(", "),
+            event_table = reference::events_table(plan, &style),
         ),
         _ => String::new(),
     };
@@ -579,7 +586,7 @@ The client owns one session, which owns the mounted realm. Keep it open and reus
 
 For asyncio, wrap the calls with `asyncio.to_thread`, or use `wre_runtime.aio.AsyncSidecar` and attach with `{class}.attach`.
 
-{events}## Deadlines
+{notes}{config}{operations}{events}## Deadlines
 
 Every op takes `deadline`, in seconds. Past it the call fails with `wre_runtime.Timeout` and the work stops inside the sidecar.
 
@@ -618,31 +625,27 @@ The schema hash is verified when the sidecar starts. A mismatch means this packa
 }
 
 fn sample(shape: &Shape) -> String {
-    match shape {
-        Shape::Object { fields, .. } => {
-            let mut parts = Vec::new();
-            for entry in fields.iter().filter(|entry| entry.required()).take(3) {
-                parts.push(format!("\"{}\": {}", entry.name, sample_value(&entry.shape)));
-            }
-            format!("{{{}}}", parts.join(", "))
-        }
-        _ => "{}".to_string(),
+    let fields = reference::example_params(shape);
+    if fields.is_empty() {
+        return "{}".to_string();
     }
+
+    let parts: Vec<String> = fields
+        .iter()
+        .map(|(name, value)| format!("\"{name}\": {}", sample_value(value)))
+        .collect();
+
+    format!("{{{}}}", parts.join(", "))
 }
 
-fn sample_value(shape: &Shape) -> String {
-    match shape {
-        Shape::Bool => "True".to_string(),
-        Shape::Int | Shape::Float => "1".to_string(),
-        Shape::Str => "\"...\"".to_string(),
-        Shape::Bytes => "\"\"".to_string(),
-        Shape::List { .. } => "[]".to_string(),
-        Shape::Map { .. } | Shape::Object { .. } | Shape::Ref { .. } => "{}".to_string(),
-        Shape::Optional { of } => sample_value(of),
-        Shape::Enum { variants, .. } => variants
-            .first()
-            .map(|item| json_string(item))
-            .unwrap_or_else(|| "\"\"".to_string()),
-        _ => "None".to_string(),
+fn sample_value(sample: &Sample) -> String {
+    match sample {
+        Sample::Bool(true) => "True".to_string(),
+        Sample::Bool(false) => "False".to_string(),
+        Sample::Number(text) => text.clone(),
+        Sample::Text(text) => json_string(text),
+        Sample::List => "[]".to_string(),
+        Sample::Map => "{}".to_string(),
+        Sample::Null => "None".to_string(),
     }
 }

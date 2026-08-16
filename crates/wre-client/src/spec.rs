@@ -100,6 +100,10 @@ pub struct ClientDescriptor {
     pub version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
     #[serde(default)]
     pub capabilities: Capabilities,
     pub config: Shape,
@@ -116,6 +120,8 @@ impl ClientDescriptor {
             id: id.into(),
             version: version.into(),
             summary: String::new(),
+            notes: String::new(),
+            primary: None,
             capabilities: Capabilities::default(),
             config: Shape::object("Config", Vec::<Field>::new()),
             ops: Vec::new(),
@@ -126,6 +132,18 @@ impl ClientDescriptor {
 
     pub fn summary(mut self, text: impl Into<String>) -> Self {
         self.summary = text.into();
+        self
+    }
+
+    /// Markdown that lands in every generated package README, under the quickstart.
+    pub fn notes(mut self, text: impl Into<String>) -> Self {
+        self.notes = text.into();
+        self
+    }
+
+    /// The op the generated examples call. Defaults to the first op that takes arguments.
+    pub fn primary(mut self, op: impl Into<String>) -> Self {
+        self.primary = Some(op.into());
         self
     }
 
@@ -179,6 +197,12 @@ impl ClientDescriptor {
                 if !self.events.iter().any(|entry| &entry.name == event) {
                     return Err(format!("op {} streams undeclared event {event}", op.name));
                 }
+            }
+        }
+
+        if let Some(primary) = &self.primary {
+            if !seen.contains(primary) {
+                return Err(format!("primary op {primary} is not declared"));
             }
         }
 

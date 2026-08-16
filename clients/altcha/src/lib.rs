@@ -29,6 +29,7 @@ pub fn registration() -> Registration {
 pub fn describe() -> ClientDescriptor {
     ClientDescriptor::new(ID, env!("CARGO_PKG_VERSION"))
         .summary("Solves ALTCHA proof-of-work challenges without a browser")
+        .primary("solve")
         .capabilities(Capabilities {
             needs_v8: false,
             needs_chrome: false,

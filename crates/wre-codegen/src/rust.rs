@@ -6,6 +6,7 @@ use wre_client::spec::OpSpec;
 use wre_core::error::Result;
 
 use crate::names::{pascal, snake};
+use crate::reference::{self, Style, Words};
 use crate::{Language, Plan, json_string, summary_line, write};
 
 pub fn emit(plan: &Plan) -> Result<Vec<PathBuf>> {
@@ -325,16 +326,29 @@ fn escape_keyword(name: &str) -> String {
     if KEYWORDS.contains(&name) { format!("r#{name}") } else { name.to_string() }
 }
 
+fn style<'a>() -> Style<'a> {
+    Style {
+        type_name: &rust_type,
+        signature: &|op: &OpSpec| {
+            if has_params(&op.params) {
+                format!("`client.{}(&params)`", escape_keyword(&snake(&op.name)))
+            } else {
+                format!("`client.{}()`", escape_keyword(&snake(&op.name)))
+            }
+        },
+        words: Words { truth: "true", falsehood: "false" },
+    }
+}
+
 fn readme(plan: &Plan) -> String {
     let name = crate_name(plan);
     let config_type = rust_type(&plan.client.config);
+    let style = style();
+    let notes = reference::notes_section(plan);
+    let config = reference::config_section(plan, &style);
+    let operations = reference::operations_section(plan, &style);
 
-    let first = plan
-        .client
-        .ops
-        .iter()
-        .find(|op| has_params(&op.params))
-        .or_else(|| plan.client.ops.first());
+    let first = reference::primary_op(plan, &has_params);
 
     let call = match first {
         Some(op) if has_params(&op.params) => format!(
@@ -370,18 +384,11 @@ let options = OpenOptions {{
 }};
 ```
 
-Declared events: {event_list}.
-
+{event_table}
 "#,
             stream_op = op.name,
             event_name = event.name,
-            event_list = plan
-                .client
-                .events
-                .iter()
-                .map(|event| format!("`{}`", event.name))
-                .collect::<Vec<_>>()
-                .join(", "),
+            event_table = reference::events_table(plan, &style),
         ),
         _ => String::new(),
     };
@@ -408,7 +415,7 @@ client.close()?;
 
 The binary is found through `WRE_BINARY`, then `WRE_WRED`, then `target/release/wred` upward from the working directory, then `PATH`.
 
-{events}## Deadlines and errors
+{notes}{config}{operations}{events}## Deadlines and errors
 
 The generated methods call without a deadline. For one with a cap, go through the session:
 

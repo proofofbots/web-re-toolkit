@@ -26,6 +26,8 @@ This writes `clients/acme` with a skeleton, adds a conformance suite stub, and w
 pub fn describe() -> ClientDescriptor {
     ClientDescriptor::new("acme", env!("CARGO_PKG_VERSION"))
         .summary("Seals a payload with the collector's own primitives")
+        .primary("solve")
+        .notes(NOTES)
         .capabilities(Capabilities {
             needs_v8: true,
             needs_network: true,
@@ -48,6 +50,8 @@ pub fn describe() -> ClientDescriptor {
 ```
 
 An `Object` or `Enum` shape becomes a named type in every generated package. Two different shapes sharing a name is an error at registration time.
+
+The descriptor is also the only source the package READMEs have. `wre client package` turns the config shape and every op into reference tables, so a `field(...).summary(...)` you skip is a blank cell on npm and PyPI. `primary` names the op the generated examples call, which otherwise is the first op that takes arguments. `notes` is markdown that lands in the README of all four languages, under the quickstart and above the tables, so keep it prose: a code block there would be in the wrong language for three of them.
 
 **The client itself.** One struct, built once per session, holding whatever is expensive: mounted realm, cookies, counters.
 

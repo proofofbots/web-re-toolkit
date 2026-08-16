@@ -6,6 +6,7 @@ use wre_client::spec::OpSpec;
 use wre_core::error::Result;
 
 use crate::names::{screaming, words};
+use crate::reference::{self, Style, Words};
 use crate::{Language, Plan, download_url, json_string, summary_line, write};
 
 fn go_name(value: &str) -> String {
@@ -404,16 +405,29 @@ fn has_params(shape: &Shape) -> bool {
     }
 }
 
+fn style<'a>() -> Style<'a> {
+    Style {
+        type_name: &|shape: &Shape| go_type(shape, true),
+        signature: &|op: &OpSpec| {
+            if has_params(&op.params) {
+                format!("`client.{}(ctx, params)`", go_name(&op.name))
+            } else {
+                format!("`client.{}(ctx)`", go_name(&op.name))
+            }
+        },
+        words: Words { truth: "true", falsehood: "false" },
+    }
+}
+
 fn readme(plan: &Plan) -> String {
     let package = package_name(plan);
     let module = module_path(plan);
+    let style = style();
+    let notes = reference::notes_section(plan);
+    let config = reference::config_section(plan, &style);
+    let operations = reference::operations_section(plan, &style);
 
-    let first = plan
-        .client
-        .ops
-        .iter()
-        .find(|op| has_params(&op.params))
-        .or_else(|| plan.client.ops.first());
+    let first = reference::primary_op(plan, &has_params);
 
     let call = match first {
         Some(op) if has_params(&op.params) => format!(
@@ -448,18 +462,11 @@ client, err := {package}.Open(ctx, nil, {package}.OpenOptions{{
 }})
 ```
 
-Declared events: {event_list}.
-
+{event_table}
 "#,
             op_name = op.name,
             event_name = event.name,
-            event_list = plan
-                .client
-                .events
-                .iter()
-                .map(|event| format!("`{}`", event.name))
-                .collect::<Vec<_>>()
-                .join(", "),
+            event_table = reference::events_table(plan, &style),
         ),
         _ => String::new(),
     };
@@ -499,7 +506,7 @@ fmt.Println(result)
 
 Check error kinds with `wre.IsKind(err, wre.KindTargetDrift)`. The kinds are `bad_input`, `unsupported`, `target_drift`, `blocked`, `timeout`, `cancelled`, `resource`, `protocol` and `internal`. Branch on the kind, never on the message.
 
-{events}## Deadlines and cancellation
+{notes}{config}{operations}{events}## Deadlines and cancellation
 
 The context carries the deadline onto the wire, so cancelling it stops the work inside the sidecar rather than only abandoning the call.
 

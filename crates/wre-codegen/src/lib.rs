@@ -3,6 +3,7 @@ pub mod go;
 pub mod names;
 pub mod node;
 pub mod python;
+pub(crate) mod reference;
 pub mod rust;
 
 use std::path::{Path, PathBuf};
