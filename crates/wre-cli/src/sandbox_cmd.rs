@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use wre_cdp::chrome::{Chrome, LaunchOptions};
 use wre_core::error::{Error, Result, io, json as json_error};
 use wre_live::realm::{Realm, RealmOptions};
 use wre_sandbox::capture::{Incoming, Server, Stored};
@@ -8,6 +9,21 @@ use wre_sandbox::{Finding, Profile, audit, install, warnings};
 
 use crate::args::SandboxCommand;
 use crate::{Context, target_cmd};
+
+fn encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+
+    out
+}
 
 fn library(context: &Context) -> Result<Library> {
     Library::load(context.workspace.profiles())
@@ -161,7 +177,7 @@ fn check_profile(profile: &Profile) -> Result<(Vec<Value>, usize, Vec<String>, u
     Ok((results, failed, sandbox.misses(), sandbox.installed().len()))
 }
 
-pub fn run(context: &Context, command: SandboxCommand) -> Result<()> {
+pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
     match command {
         SandboxCommand::List => {
             let library = library(context)?;
@@ -285,9 +301,13 @@ pub fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             Ok(())
         }
 
-        SandboxCommand::Capture { host, port, keep, force } => {
+        SandboxCommand::Capture { host, port, open, label, chrome_port, keep, force } => {
             let mut library = library(context)?;
-            let server = Server::bind(&host, port)?;
+            let mut server = Server::bind(&host, port)?;
+
+            if open {
+                server = server.sending_on_its_own(label.clone());
+            }
 
             context.note(&format!("capture page on {}", server.url()));
             context.note(&format!("profiles land in {}", library.dir().display()));
@@ -305,6 +325,38 @@ pub fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             } else {
                 "open it in the browser you want to replay, this exits after one capture"
             });
+
+            let mut driven = None;
+
+            if open {
+                let url = format!("{}/", server.url());
+
+                let chrome = Chrome::launch(LaunchOptions {
+                    port: chrome_port,
+                    headless: false,
+                    offscreen: false,
+                    profile: context
+                        .workspace
+                        .chrome_profiles()
+                        .join(format!("profile-{chrome_port}")),
+                    ..LaunchOptions::default()
+                })
+                .await?;
+
+                if chrome.headless || chrome.version.user_agent.contains("Headless") {
+                    context.note(
+                        "the browser on that port is headless, its profile is not one to replay",
+                    );
+                }
+
+                let session = chrome.new_page(&url).await?;
+                session.try_send("Page.enable", json!({})).await;
+                session.try_send("Page.bringToFront", json!({})).await;
+                session.try_send("Page.navigate", json!({ "url": url })).await;
+
+                context.note(&format!("driving {} on port {chrome_port}", chrome.version.browser));
+                driven = Some((chrome, session));
+            }
 
             let mut stored: Vec<Value> = Vec::new();
 
@@ -338,6 +390,10 @@ pub fn run(context: &Context, command: SandboxCommand) -> Result<()> {
 
                 Ok(Stored { id, path: path.display().to_string(), warnings: warned })
             })?;
+
+            if let Some((_chrome, session)) = driven {
+                session.try_send("Page.close", json!({})).await;
+            }
 
             context.emit(&json!({ "stored": stored }), "");
             Ok(())

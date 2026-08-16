@@ -468,6 +468,12 @@ pub enum SandboxCommand {
         host: String,
         #[arg(long, default_value_t = 8099)]
         port: u16,
+        #[arg(long, help = "open the page in a real Chrome and store what it sends back")]
+        open: bool,
+        #[arg(long, help = "label the profile the browser sends back")]
+        label: Option<String>,
+        #[arg(long, default_value_t = wre_cdp::chrome::DEFAULT_PORT, help = "debugging port for the browser --open drives")]
+        chrome_port: u16,
         #[arg(long)]
         keep: bool,
         #[arg(long)]

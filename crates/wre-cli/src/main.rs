@@ -159,7 +159,7 @@ async fn run(context: &Context, command: Command) -> Result<()> {
         Command::Sweep { baseline, arm, pointer } => {
             misc_cmd::sweep(context, &baseline, &arm, pointer)
         }
-        Command::Sandbox(command) => sandbox_cmd::run(context, command),
+        Command::Sandbox(command) => sandbox_cmd::run(context, command).await,
         Command::Markers { kind, group } => misc_cmd::markers(context, kind, group),
 
         Command::Locate { input, target, module, lock } => {
