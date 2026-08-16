@@ -14,5 +14,8 @@ pub fn build() -> Result<Registry, String> {
     #[cfg(feature = "target-altcha")]
     registry.register(wre_client_altcha::registration())?;
 
+    #[cfg(feature = "target-akamai")]
+    registry.register(wre_client_akamai::registration())?;
+
     Ok(registry)
 }

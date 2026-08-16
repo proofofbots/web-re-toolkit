@@ -3408,6 +3408,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wre-client-akamai"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "regex",
+ "serde",
+ "serde_json",
+ "tracing",
+ "url",
+ "wre-behavior",
+ "wre-client",
+ "wre-core",
+ "wre-live",
+ "wre-pow",
+ "wre-sandbox",
+]
+
+[[package]]
 name = "wre-client-altcha"
 version = "0.1.0"
 dependencies = [
@@ -3452,6 +3470,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wre-client",
+ "wre-client-akamai",
  "wre-client-altcha",
  "wre-client-example",
  "wre-core",
@@ -3669,9 +3688,12 @@ name = "wre-sandbox"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "tracing",
+ "url",
+ "wre-behavior",
  "wre-core",
  "wre-live",
 ]

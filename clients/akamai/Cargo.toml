@@ -1,0 +1,23 @@
+[package]
+name = "wre-client-akamai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runs an Akamai Bot Manager sensor script headlessly and carries the session it produces"
+
+[dependencies]
+wre-behavior.workspace = true
+wre-client.workspace = true
+wre-core.workspace = true
+wre-live.workspace = true
+wre-pow.workspace = true
+wre-sandbox.workspace = true
+
+base64.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+url.workspace = true
