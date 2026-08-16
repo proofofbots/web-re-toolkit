@@ -52,7 +52,7 @@ jobs:
             version="${TAG#v}"
             publish=true
           else
-            version="$INPUT_VERSION"
+            version="${INPUT_VERSION#v}"
             publish="$INPUT_PUBLISH"
           fi
 
@@ -304,26 +304,33 @@ jobs:
       - name: Restore the executable bit
         run: find release -name "wred" -exec chmod +x {} +
 
-      - name: Publish the runtime
-        run: npm publish --access public release/node/runtime
-
-      - name: Publish the platform packages
+      - name: Publish every package that is not on the registry yet
         run: |
           set -euo pipefail
-          for dir in release/node/*/platform/*/; do
-            echo "publishing $dir"
+
+          publish() {
+            dir="$1"
+            name="$(node -p "require('./$dir/package.json').name")"
+            version="$(node -p "require('./$dir/package.json').version")"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "skipping $name@$version, already published"
+              return
+            fi
+            echo "publishing $name@$version from $dir"
             npm publish --access public "$dir"
+          }
+
+          publish release/node/runtime
+
+          for dir in release/node/*/platform/*/; do
+            publish "${dir%/}"
           done
 
-      - name: Publish the client packages
-        run: |
-          set -euo pipefail
           for dir in release/node/*/; do
             if [ "$dir" = "release/node/runtime/" ]; then
               continue
             fi
-            echo "publishing $dir"
-            npm publish --access public "$dir"
+            publish "${dir%/}"
           done
 
   pypi:
@@ -372,6 +379,20 @@ jobs:
           echo "built $DIST"
           ls -l "$GITHUB_WORKSPACE/wheels"
 
+      - name: Refuse a wheel the index will reject
+        run: |
+          set -euo pipefail
+          limit=$((100 * 1024 * 1024))
+          for file in wheels/*; do
+            size="$(stat -c %s "$file")"
+            echo "$file is $((size / 1024 / 1024)) MiB"
+            if [ "$size" -ge "$limit" ]; then
+              echo "$file exceeds the 100 MB PyPI file limit" >&2
+              exit 1
+            fi
+          done
+
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: wheels
+          skip-existing: true

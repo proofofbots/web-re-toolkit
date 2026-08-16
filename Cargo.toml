@@ -96,6 +96,7 @@ v8 = "152.1.0"
 opt-level = 3
 lto = "thin"
 codegen-units = 4
+strip = "symbols"
 
 [profile.dev]
 opt-level = 1
