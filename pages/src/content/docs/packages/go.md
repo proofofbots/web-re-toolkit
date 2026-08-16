@@ -6,7 +6,7 @@ description: Install a generated client module or the runtime, open a session, a
 ## Install a client
 
 ```bash
-go get github.com/proofofbots/web-re-toolkit/packages/go/clients/altcha
+go get github.com/proofofbots/web-re-toolkit/packages/go/clients/akamai
 ```
 
 Go 1.21 or later. Go modules publish from the repository tree by tag, so the module version follows the release tag.
@@ -14,18 +14,18 @@ Go 1.21 or later. Go modules publish from the repository tree by tag, so the mod
 ```go
 ctx := context.Background()
 
-client, err := clientaltcha.Open(ctx, nil, clientaltcha.OpenOptions{})
+page := "https://acme.example/"
+client, err := clientakamai.Open(ctx, &clientakamai.AkamaiConfig{PageURL: &page}, clientakamai.OpenOptions{})
 if err != nil {
 	log.Fatal(err)
 }
 defer client.Close(ctx)
 
-url := "https://acme.example/"
-result, err := client.Solve(ctx, clientaltcha.SolveInput{URL: &url})
+solved, err := client.Solve(ctx, clientakamai.SolveInput{})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Println(result.Payload)
+fmt.Println(string(solved.Cookies))
 ```
 
 Each op is a method with typed input and result structs, generated from the descriptor.

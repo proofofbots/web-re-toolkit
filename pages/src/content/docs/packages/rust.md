@@ -11,20 +11,22 @@ wre client package --bundle default
 
 ```toml
 [dependencies]
-wre-sdk-altcha = { path = "dist/default/packages/rust/altcha" }
+wre-sdk-akamai = { path = "dist/default/packages/rust/akamai" }
 ```
 
 ## Use
 
 ```rust
-use wre_sdk_altcha::{AltchaConfig, Client, OpenOptions, SolveInput};
+use wre_sdk_akamai::{AkamaiConfig, Client, OpenOptions, SolveInput};
 
-let client = Client::open(&AltchaConfig::default(), OpenOptions::default())?;
-let result = client.solve(&SolveInput {
-    url: Some("https://acme.example/".into()),
+let config = AkamaiConfig {
+    page_url: Some("https://acme.example/".into()),
     ..Default::default()
-})?;
-println!("{}", result.payload);
+};
+
+let client = Client::open(&config, OpenOptions::default())?;
+let solved = client.solve(&SolveInput::default())?;
+println!("{:?}", solved.cookies);
 client.close()?;
 ```
 

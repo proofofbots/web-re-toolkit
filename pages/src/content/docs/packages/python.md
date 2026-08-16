@@ -6,21 +6,30 @@ description: Install a generated client package or the runtime, open a session, 
 ## Install a client
 
 ```bash
-pip install wre-client-altcha
+pip install wre-client-akamai
 ```
 
 Python 3.9 or later. The `wred` binary ships in the wheel for your platform.
 
 ```python
-from wre_client_altcha import AltchaClient
+from wre_client_akamai import AkamaiClient
 
-with AltchaClient.open() as client:
-    print(client.solve({"url": "https://acme.example/"}))
+with AkamaiClient.open({"page_url": "https://acme.example/"}) as client:
+    solved = client.solve({})
+    print(solved["cookies"])
+
+    answered = client.request({
+        "url": "https://acme.example/api/checkout",
+        "method": "POST",
+        "json": {"sku": "A-1"},
+        "telemetry": True,
+    })
+    print(answered["status"], answered["refused"])
 ```
 
-The client owns one session, which owns the mounted realm. Keep it open and reuse it rather than opening one per call.
+The client owns one session, which owns the mounted realm and the cookie jar. Keep it open and reuse it rather than opening one per call.
 
-For asyncio, wrap the calls with `asyncio.to_thread`, or use `wre_runtime.aio.AsyncSidecar` and attach with `AltchaClient.attach`.
+For asyncio, wrap the calls with `asyncio.to_thread`, or use `wre_runtime.aio.AsyncSidecar` and attach with `AkamaiClient.attach`.
 
 ## Install the runtime
 

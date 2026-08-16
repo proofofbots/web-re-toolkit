@@ -6,21 +6,31 @@ description: Install a generated client package or the runtime, open a session, 
 ## Install a client
 
 ```bash
-npm install @proofofbot/client-altcha
+npm install @proofofbot/client-akamai
 ```
 
 The `wred` binary for your platform arrives as an optional dependency. Node 18 or later.
 
 ```js
-import { AltchaClient } from "@proofofbot/client-altcha";
+import { AkamaiClient } from "@proofofbot/client-akamai";
 
-const client = await AltchaClient.open({});
-const result = await client.solve({ url: "https://acme.example/" });
-console.log(result);
+const client = await AkamaiClient.open({ page_url: "https://acme.example/" });
+
+const solved = await client.solve({});
+console.log(solved.cookies);
+
+const answered = await client.request({
+  url: "https://acme.example/api/checkout",
+  method: "POST",
+  json: { sku: "A-1" },
+  telemetry: true,
+});
+console.log(answered.status, answered.refused);
+
 await client.close();
 ```
 
-One client owns one session, which owns the mounted realm. Open it once and reuse it. Opening one per call pays the warmup cost every time.
+One client owns one session, which owns the mounted realm and the cookie jar. Open it once and reuse it. Opening one per call pays the warmup cost every time, and throws away the `_abck` cookie the previous run earned.
 
 ## Install the runtime
 
@@ -61,11 +71,11 @@ One sidecar process serves many sessions. A session owns the expensive state, a 
 A session is not an event emitter. Events are correlated by call id and delivered to a callback, either for the whole connection or for one call:
 
 ```js
-const client = await AltchaClient.open({}, {
+const client = await AkamaiClient.open({ page_url: "https://acme.example/" }, {
   onEvent: (id, event, data) => console.log(event, data),
 });
 
-await client.solve({ url: "https://acme.example/" }, {
+await client.solve({}, {
   onEvent: (id, event, data) => console.log(event, data),
 });
 ```
@@ -80,10 +90,7 @@ Both fire when both are set: the per-call handler first, then the connection han
 const abort = new AbortController();
 setTimeout(() => abort.abort(), 5000);
 
-await client.solve({ url: "https://acme.example/" }, {
-  deadlineMs: 20000,
-  signal: abort.signal,
-});
+await client.solve({}, { deadlineMs: 180000, signal: abort.signal });
 ```
 
 A deadline that passes rejects with `kind === "timeout"`, an abort with `kind === "cancelled"`.
