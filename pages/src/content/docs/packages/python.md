@@ -37,6 +37,7 @@ Warm a session against a protected login page, read the antiforgery token out of
 
 ```python
 import time
+from typing import Optional
 
 from wre_client_akamai import open_client
 
@@ -44,7 +45,7 @@ PAGE = "https://login.xero.com/identity/user/login"
 PRECHECK = "https://login.xero.com/identity/user/login/pre-check"
 
 
-def field(html: str, name: str) -> str | None:
+def field(html: str, name: str) -> Optional[str]:
     at = html.find(f'name="{name}"')
     if at < 0:
         return None
@@ -57,7 +58,7 @@ def field(html: str, name: str) -> str | None:
     return None if end < 0 else tail[:end]
 
 
-with open_client({"page_url": PAGE, "wait_ms": 8000, "rounds": 2}) as client:
+with open_client({"page_url": PAGE, "wait_ms": 100, "rounds": 1}) as client:
     found = client.discover({})
     print("discover:", {"status": found["status"], "protected": found["protected"]})
 

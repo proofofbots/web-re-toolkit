@@ -53,7 +53,7 @@ const field = (html, name) => {
   return end < 0 ? null : tail.slice(0, end);
 };
 
-const client = await open({ page_url: PAGE, wait_ms: 8000, rounds: 2 });
+const client = await open({ page_url: PAGE, wait_ms: 100, rounds: 1 });
 
 try {
   const found = await client.discover({});
