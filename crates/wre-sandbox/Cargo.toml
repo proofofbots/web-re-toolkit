@@ -8,10 +8,13 @@ repository.workspace = true
 description = "A browser surface built from native bindings, so the shapes a protection inspects are real rather than faked in JavaScript"
 
 [dependencies]
+wre-behavior.workspace = true
 wre-core.workspace = true
 wre-live.workspace = true
 
 chrono.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+url.workspace = true
