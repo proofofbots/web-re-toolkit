@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,9 +13,10 @@ use crate::library::Origin;
 use crate::profile::Profile;
 
 pub const PAGE: &str = include_str!("../assets/capture.html");
+pub const GRAPH_PAGE: &str = include_str!("../assets/capture-graph.html");
 
 const HEAD_LIMIT: usize = 64 * 1024;
-const BODY_LIMIT: usize = 16 * 1024 * 1024;
+const BODY_LIMIT: usize = 192 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Incoming {
@@ -26,6 +27,27 @@ pub struct Incoming {
     #[serde(default)]
     pub origin: Origin,
     pub profile: Profile,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IncomingGraph {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub href: String,
+    #[serde(default)]
+    pub user_agent: String,
+    pub snapshot: serde_json::Value,
+    #[serde(default)]
+    pub tables: crate::graph::Tables,
+}
+
+#[derive(Debug, Clone)]
+pub enum Taken {
+    Profile(Box<Incoming>),
+    Graph(Box<IncomingGraph>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,6 +61,8 @@ pub struct Server {
     listener: TcpListener,
     address: SocketAddr,
     auto: Option<String>,
+    html: &'static str,
+    calls: Option<String>,
 }
 
 impl Server {
@@ -47,7 +71,23 @@ impl Server {
             .map_err(|error| Error::msg(format!("cannot listen on {host}:{port}: {error}")))?;
         let address = listener.local_addr().map_err(io("listener"))?;
 
-        Ok(Self { listener, address, auto: None })
+        Ok(Self {
+            listener,
+            address,
+            auto: None,
+            html: PAGE,
+            calls: None,
+        })
+    }
+
+    pub fn answering_calls(mut self, calls: String) -> Self {
+        self.calls = Some(calls);
+        self
+    }
+
+    pub fn walking_the_graph(mut self) -> Self {
+        self.html = GRAPH_PAGE;
+        self
     }
 
     pub fn sending_on_its_own(mut self, label: Option<String>) -> Self {
@@ -57,7 +97,7 @@ impl Server {
 
     pub fn page(&self) -> String {
         let Some(label) = &self.auto else {
-            return PAGE.to_string();
+            return self.html.to_string();
         };
 
         let marker = format!(
@@ -65,7 +105,7 @@ impl Server {
             json!(label)
         );
 
-        PAGE.replacen("</head>", &marker, 1)
+        self.html.replacen("</head>", &marker, 1)
     }
 
     pub fn address(&self) -> SocketAddr {
@@ -83,11 +123,12 @@ impl Server {
 
     pub fn run<F>(&self, keep: bool, mut store: F) -> Result<usize>
     where
-        F: FnMut(Incoming, &str) -> Result<Stored>,
+        F: FnMut(Taken, &str) -> Result<Stored>,
     {
         let listener = self.listener.try_clone().map_err(io("listener"))?;
         let (jobs, inbox) = mpsc::channel::<Job>();
         let page = Arc::new(self.page());
+        let calls = Arc::new(self.calls.clone().unwrap_or_default());
 
         std::thread::Builder::new()
             .name("wre-capture-accept".to_string())
@@ -96,6 +137,7 @@ impl Server {
                     let Ok(mut stream) = stream else { continue };
                     let jobs = jobs.clone();
                     let page = Arc::clone(&page);
+                    let calls = Arc::clone(&calls);
 
                     let spawned = std::thread::Builder::new()
                         .name("wre-capture-connection".to_string())
@@ -108,7 +150,7 @@ impl Server {
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
                             let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
 
-                            if let Err(error) = handle(&mut stream, &peer, &jobs, &page) {
+                            if let Err(error) = handle(&mut stream, &peer, &jobs, &page, &calls) {
                                 tracing::debug!("sandbox capture request failed: {error}");
                             }
                         });
@@ -123,7 +165,7 @@ impl Server {
         let mut taken = 0usize;
 
         while let Ok(job) = inbox.recv() {
-            let outcome = store(job.incoming, &job.peer);
+            let outcome = store(job.taken, &job.peer);
             let answered = match &outcome {
                 Ok(stored) => job.reply.send(Ok(stored.clone())),
                 Err(error) => job.reply.send(Err(error.to_string())),
@@ -146,7 +188,7 @@ impl Server {
 }
 
 struct Job {
-    incoming: Incoming,
+    taken: Taken,
     peer: String,
     reply: mpsc::Sender<std::result::Result<Stored, String>>,
 }
@@ -156,6 +198,7 @@ fn handle(
     peer: &str,
     jobs: &mpsc::Sender<Job>,
     page: &str,
+    calls: &str,
 ) -> Result<bool> {
     let (head, rest) = read_head(stream)?;
     let mut lines = head.split("\r\n");
@@ -170,23 +213,40 @@ fn handle(
             Ok(false)
         }
 
-        ("POST", "/profile") => {
+        ("POST", "/profile") | ("POST", "/graph") => {
             let length = content_length(&head)?;
             let body = read_body(stream, rest, length)?;
 
-            let incoming: Incoming = match serde_json::from_slice(&body) {
-                Ok(incoming) => incoming,
-                Err(error) => {
-                    let message = json!({ "error": format!("the capture did not parse: {error}") });
-                    respond_json(stream, 400, &message)?;
-                    return Ok(false);
+            let taken = if path == "/graph" {
+                match serde_json::from_slice::<IncomingGraph>(&body) {
+                    Ok(incoming) => Taken::Graph(Box::new(incoming)),
+                    Err(error) => {
+                        let message =
+                            json!({ "error": format!("the capture did not parse: {error}") });
+                        respond_json(stream, 400, &message)?;
+                        return Ok(false);
+                    }
+                }
+            } else {
+                match serde_json::from_slice::<Incoming>(&body) {
+                    Ok(incoming) => Taken::Profile(Box::new(incoming)),
+                    Err(error) => {
+                        let message =
+                            json!({ "error": format!("the capture did not parse: {error}") });
+                        respond_json(stream, 400, &message)?;
+                        return Ok(false);
+                    }
                 }
             };
 
             let (reply, answer) = mpsc::channel();
 
             if jobs
-                .send(Job { incoming, peer: peer.to_string(), reply })
+                .send(Job {
+                    taken,
+                    peer: peer.to_string(),
+                    reply,
+                })
                 .is_err()
             {
                 let message = json!({ "error": "the capture host stopped listening" });
@@ -204,10 +264,23 @@ fn handle(
                     Ok(false)
                 }
                 Err(_) => {
-                    respond_json(stream, 500, &json!({ "error": "the capture host went away" }))?;
+                    respond_json(
+                        stream,
+                        500,
+                        &json!({ "error": "the capture host went away" }),
+                    )?;
                     Ok(false)
                 }
             }
+        }
+
+        ("GET", "/calls.json") => {
+            if calls.is_empty() {
+                respond(stream, 404, "application/json", b"[]")?;
+            } else {
+                respond(stream, 200, "application/json", calls.as_bytes())?;
+            }
+            Ok(false)
         }
 
         ("GET", "/favicon.ico") => {
@@ -248,7 +321,9 @@ fn read_head(stream: &mut TcpStream) -> Result<(String, Vec<u8>)> {
 
 fn read_body(stream: &mut TcpStream, mut body: Vec<u8>, length: usize) -> Result<Vec<u8>> {
     if length > BODY_LIMIT {
-        return Err(Error::msg(format!("the capture is {length} bytes, over the limit")));
+        return Err(Error::msg(format!(
+            "the capture is {length} bytes, over the limit"
+        )));
     }
 
     let mut chunk = [0u8; 8192];
@@ -266,7 +341,9 @@ fn read_body(stream: &mut TcpStream, mut body: Vec<u8>, length: usize) -> Result
 
 fn content_length(head: &str) -> Result<usize> {
     for line in head.split("\r\n").skip(1) {
-        let Some((name, value)) = line.split_once(':') else { continue };
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
         if name.trim().eq_ignore_ascii_case("content-length") {
             return value
                 .trim()
@@ -279,7 +356,9 @@ fn content_length(head: &str) -> Result<usize> {
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn reason(status: u16) -> &'static str {
@@ -299,7 +378,9 @@ fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> Resu
         body.len()
     );
 
-    stream.write_all(head.as_bytes()).map_err(io("capture response"))?;
+    stream
+        .write_all(head.as_bytes())
+        .map_err(io("capture response"))?;
     stream.write_all(body).map_err(io("capture response"))?;
     stream.flush().map_err(io("capture response"))?;
     Ok(())
@@ -322,10 +403,16 @@ mod tests {
 
         let worker = std::thread::spawn(move || {
             server
-                .run(false, |incoming, peer| {
+                .run(false, |taken, peer| {
                     assert_eq!(peer, "127.0.0.1");
+
+                    let label = match &taken {
+                        Taken::Profile(incoming) => incoming.label.clone(),
+                        Taken::Graph(incoming) => incoming.label.clone(),
+                    };
+
                     Ok(Stored {
-                        id: incoming.label.clone(),
+                        id: label,
                         path: "/tmp/x.json".to_string(),
                         warnings: 0,
                     })
@@ -334,7 +421,8 @@ mod tests {
         });
 
         let mut page = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        page.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").unwrap();
+        page.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .unwrap();
         let mut text = String::new();
         page.read_to_string(&mut text).unwrap();
         assert!(text.contains("wre sandbox capture"), "{text}");
@@ -369,13 +457,14 @@ mod tests {
         let port = server.address().port();
 
         std::thread::spawn(move || {
-            let _ = server.run(true, |_incoming, _peer| {
+            let _ = server.run(true, |_taken, _peer| {
                 panic!("a body that is not a profile must never reach the sink");
             });
         });
 
         let mut post = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        post.write_all(b"POST /profile HTTP/1.1\r\ncontent-length: 2\r\n\r\n{}").unwrap();
+        post.write_all(b"POST /profile HTTP/1.1\r\ncontent-length: 2\r\n\r\n{}")
+            .unwrap();
 
         let mut answer = String::new();
         post.read_to_string(&mut answer).unwrap();

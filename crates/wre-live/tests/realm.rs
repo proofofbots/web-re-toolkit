@@ -37,8 +37,12 @@ fn pins_the_clock() {
 fn seeds_random_deterministically() {
     let mut first = realm();
     let mut second = realm();
-    let a = first.eval("[Math.random(), Math.random()]", "test").unwrap();
-    let b = second.eval("[Math.random(), Math.random()]", "test").unwrap();
+    let a = first
+        .eval("[Math.random(), Math.random()]", "test")
+        .unwrap();
+    let b = second
+        .eval("[Math.random(), Math.random()]", "test")
+        .unwrap();
     assert_eq!(a, b);
     assert_ne!(a[0], a[1]);
 }
@@ -63,7 +67,10 @@ fn captures_console_output() {
 fn reports_thrown_errors_with_context() {
     let mut realm = realm();
     let error = realm
-        .eval_unit("function boom() { throw new Error('kaboom'); } boom();", "test")
+        .eval_unit(
+            "function boom() { throw new Error('kaboom'); } boom();",
+            "test",
+        )
         .unwrap_err();
     let text = error.to_string();
     assert!(text.contains("kaboom"), "{text}");
@@ -85,7 +92,10 @@ fn stops_runaway_execution() {
 fn captures_and_calls_a_function_handle() {
     let mut realm = realm();
     realm
-        .eval_unit("globalThis.mix = function (a, b) { return a * 10 + b.length; };", "test")
+        .eval_unit(
+            "globalThis.mix = function (a, b) { return a * 10 + b.length; };",
+            "test",
+        )
         .unwrap();
 
     let handle = realm.capture("mix", "globalThis.mix").unwrap();
@@ -126,7 +136,13 @@ fn host_errors_surface_as_javascript_exceptions() {
         .eval("(() => { try { __hostFail(); return 'no throw'; } catch (e) { return e.message; } })()", "test")
         .unwrap();
 
-    assert!(value.as_str().unwrap_or_default().contains("no such device"), "{value}");
+    assert!(
+        value
+            .as_str()
+            .unwrap_or_default()
+            .contains("no such device"),
+        "{value}"
+    );
 }
 
 #[test]
@@ -149,14 +165,26 @@ fn runs_queued_timers_on_demand() {
 fn records_property_access_through_a_watch() {
     let mut realm = realm();
     realm
-        .eval_unit("globalThis.navigator = { userAgent: 'ua', platform: 'MacIntel' };", "test")
+        .eval_unit(
+            "globalThis.navigator = { userAgent: 'ua', platform: 'MacIntel' };",
+            "test",
+        )
         .unwrap();
 
     assert!(realm.watch("globalThis", "navigator", "navigator").unwrap());
-    realm.eval_unit("var a = navigator.userAgent; var b = navigator.platform;", "test").unwrap();
+    realm
+        .eval_unit(
+            "var a = navigator.userAgent; var b = navigator.platform;",
+            "test",
+        )
+        .unwrap();
 
     let records = realm.records().unwrap();
-    let keys: Vec<&str> = records.access.iter().map(|entry| entry.key.as_str()).collect();
+    let keys: Vec<&str> = records
+        .access
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
     assert!(keys.contains(&"userAgent"), "{keys:?}");
     assert!(keys.contains(&"platform"), "{keys:?}");
 }
@@ -165,10 +193,17 @@ fn records_property_access_through_a_watch() {
 fn records_traced_calls() {
     let mut realm = realm();
     realm
-        .eval_unit("globalThis.holder = { encode: function (text) { return text.toUpperCase(); } };", "test")
+        .eval_unit(
+            "globalThis.holder = { encode: function (text) { return text.toUpperCase(); } };",
+            "test",
+        )
         .unwrap();
 
-    assert!(realm.trace("globalThis.holder", "encode", "encode").unwrap());
+    assert!(
+        realm
+            .trace("globalThis.holder", "encode", "encode")
+            .unwrap()
+    );
     let value = realm.eval("holder.encode('ab')", "test").unwrap();
     assert_eq!(value, json!("AB"));
 
@@ -188,11 +223,8 @@ fn base64_helpers_are_present() {
 #[test]
 fn applies_source_patches() {
     let source = "var mode = 'live'; function go() { return mode; }";
-    let (patched, applied) = apply_patches(
-        source,
-        &[SourcePatch::literal("'live'", "'offline'")],
-    )
-    .unwrap();
+    let (patched, applied) =
+        apply_patches(source, &[SourcePatch::literal("'live'", "'offline'")]).unwrap();
 
     assert_eq!(applied, 1);
     assert!(patched.contains("'offline'"));
@@ -206,8 +238,11 @@ fn a_required_patch_that_misses_is_an_error() {
 
 #[test]
 fn an_optional_patch_that_misses_is_fine() {
-    let (out, applied) =
-        apply_patches("var a = 1;", &[SourcePatch::literal("nope", "x").optional()]).unwrap();
+    let (out, applied) = apply_patches(
+        "var a = 1;",
+        &[SourcePatch::literal("nope", "x").optional()],
+    )
+    .unwrap();
     assert_eq!(applied, 0);
     assert_eq!(out, "var a = 1;");
 }
@@ -253,7 +288,10 @@ fn mounts_a_target_and_borrows_its_primitives() {
 
     let mut mounted = mount(target, &plan, RealmOptions::default()).expect("mounted");
 
-    assert_eq!(mounted.roles(), vec!["checksum".to_string(), "rotate".to_string()]);
+    assert_eq!(
+        mounted.roles(),
+        vec!["checksum".to_string(), "rotate".to_string()]
+    );
 
     let rotated = mounted.call("rotate", &[json!("hello"), json!(3)]).unwrap();
     let back = mounted
@@ -300,4 +338,175 @@ fn lists_global_names() {
     let names = realm.global_names().unwrap();
     assert!(names.iter().any(|name| name == "JSON"));
     assert!(names.iter().any(|name| name == "console"));
+}
+
+#[test]
+fn a_frame_is_a_realm_of_its_own() {
+    let mut realm = realm();
+    let frame = realm.open_frame().unwrap();
+
+    realm
+        .eval_unit("globalThis.here = 'document';", "")
+        .unwrap();
+    realm
+        .eval_unit_in(frame, "globalThis.here = 'frame';", "")
+        .unwrap();
+
+    assert_eq!(
+        realm.eval_json("globalThis.here").unwrap(),
+        json!("document")
+    );
+    assert_eq!(
+        realm.eval_json_in(frame, "globalThis.here").unwrap(),
+        json!("frame")
+    );
+    assert_eq!(realm.frame_count(), 1);
+
+    let separate = realm
+        .eval_json_in(frame, "globalThis.Object === undefined")
+        .unwrap();
+    assert_eq!(
+        separate,
+        json!(false),
+        "a frame has its own builtins, not none"
+    );
+}
+
+#[test]
+fn a_frames_global_and_its_values_cross_into_the_document() {
+    let mut realm = realm();
+    let frame = realm.open_frame().unwrap();
+
+    realm
+        .eval_unit_in(frame, "globalThis.mark = { from: 'frame' };", "")
+        .unwrap();
+
+    realm.share_global(frame, None, "view").unwrap();
+    realm
+        .share_value(frame, "globalThis.mark", "carried")
+        .unwrap();
+
+    assert_eq!(realm.eval_json("view.mark.from").unwrap(), json!("frame"));
+    assert_eq!(realm.eval_json("carried.from").unwrap(), json!("frame"));
+    assert_eq!(
+        realm.eval_json("view === globalThis").unwrap(),
+        json!(false)
+    );
+    assert_eq!(
+        realm.eval_json("view.Object === Object").unwrap(),
+        json!(false),
+        "the frame's builtins are not the document's"
+    );
+}
+
+#[test]
+fn one_table_can_be_shared_into_every_frame() {
+    let mut realm = realm();
+    let first = realm.open_frame().unwrap();
+    let second = realm.open_frame().unwrap();
+
+    realm
+        .eval_unit("globalThis.shared = new WeakMap();", "")
+        .unwrap();
+    realm
+        .share_into(first, "globalThis.shared", "shared")
+        .unwrap();
+    realm
+        .share_into(second, "globalThis.shared", "shared")
+        .unwrap();
+
+    realm
+        .eval_unit(
+            "globalThis.key = {}; shared.set(globalThis.key, 'seen');",
+            "",
+        )
+        .unwrap();
+    realm
+        .share_value(first, "globalThis.shared", "back")
+        .unwrap();
+
+    assert_eq!(
+        realm.eval_json("back.get(globalThis.key)").unwrap(),
+        json!("seen")
+    );
+
+    realm.share_into(second, "globalThis.key", "key").unwrap();
+    assert_eq!(
+        realm
+            .eval_json_in(second, "shared.get(globalThis.key)")
+            .unwrap(),
+        json!("seen")
+    );
+}
+
+#[test]
+fn a_javascript_method_can_be_rebuilt_as_a_native_one() {
+    let mut realm = realm();
+
+    realm
+        .eval_unit(
+            "globalThis.Shell = function () {};
+             Shell.prototype.make = function make(kind) { return 'made ' + kind; };",
+            "",
+        )
+        .unwrap();
+
+    realm
+        .make_native("Shell.prototype", "make", Some("createElement"))
+        .unwrap();
+
+    assert_eq!(
+        realm.eval_json("new Shell().make('div')").unwrap(),
+        json!("made div"),
+        "the replacement still forwards"
+    );
+
+    assert_eq!(
+        realm
+            .eval_json("Function.prototype.toString.call(Shell.prototype.make)")
+            .unwrap(),
+        json!("function createElement() { [native code] }")
+    );
+
+    assert_eq!(
+        realm.eval_json("Shell.prototype.make.name").unwrap(),
+        json!("createElement")
+    );
+    assert_eq!(
+        realm.eval_json("Shell.prototype.make.length").unwrap(),
+        json!(1)
+    );
+
+    let message = realm
+        .eval_json(
+            "(function () { try { class X extends Shell.prototype.make {} } catch (error) { return error.message; } return 'no throw'; })()",
+        )
+        .unwrap();
+
+    assert_eq!(
+        message,
+        json!(
+            "Class extends value function createElement() { [native code] } is not a constructor or null"
+        )
+    );
+}
+
+#[test]
+fn a_rebuilt_method_still_throws_what_it_threw() {
+    let mut realm = realm();
+
+    realm
+        .eval_unit(
+            "globalThis.Shell = { fail: function () { throw new TypeError('Illegal invocation'); } };",
+            "",
+        )
+        .unwrap();
+
+    realm.make_native("Shell", "fail", None).unwrap();
+
+    let message = realm
+        .eval_json("(function () { try { Shell.fail(); } catch (error) { return error.message; } return 'no throw'; })()")
+        .unwrap();
+
+    assert_eq!(message, json!("Illegal invocation"));
 }

@@ -10,10 +10,18 @@ use clap::{Parser, Subcommand};
     long_about = "Capture a browser run, open the script, borrow its primitives, lift its virtual machine and attribute its signals."
 )]
 pub struct Cli {
-    #[arg(long, global = true, help = "Workspace root, defaults to the nearest wre.toml or .git")]
+    #[arg(
+        long,
+        global = true,
+        help = "Workspace root, defaults to the nearest wre.toml or .git"
+    )]
     pub root: Option<PathBuf>,
 
-    #[arg(long, global = true, help = "Print machine readable json instead of a table")]
+    #[arg(
+        long,
+        global = true,
+        help = "Print machine readable json instead of a table"
+    )]
     pub json: bool,
 
     #[arg(long, global = true, default_value = "info", help = "Log level")]
@@ -38,9 +46,7 @@ pub enum Command {
     Targets,
 
     #[command(about = "Check a manifest without running anything")]
-    Check {
-        target: String,
-    },
+    Check { target: String },
 
     #[command(about = "Find a target's surface in a document, no browser")]
     Discover {
@@ -49,7 +55,10 @@ pub enum Command {
         target: Option<String>,
         #[arg(long)]
         proxy: Option<String>,
-        #[arg(long, help = "Client to emulate, as profile[:platform], for example chrome_141:windows")]
+        #[arg(
+            long,
+            help = "Client to emulate, as profile[:platform], for example chrome_141:windows"
+        )]
         fingerprint: Option<String>,
     },
 
@@ -166,7 +175,10 @@ pub enum Command {
         eval: Option<String>,
     },
 
-    #[command(subcommand, about = "Headless clients: bundles, binaries and language packages")]
+    #[command(
+        subcommand,
+        about = "Headless clients: bundles, binaries and language packages"
+    )]
     Client(ClientCommand),
 
     #[command(subcommand, about = "Custom virtual machine workbench")]
@@ -193,10 +205,7 @@ pub enum Command {
     },
 
     #[command(about = "Save a generated map as a baseline")]
-    Baseline {
-        name: String,
-        map: PathBuf,
-    },
+    Baseline { name: String, map: PathBuf },
 
     #[command(about = "Attribute payload addresses to knobs from recorded captures")]
     Sweep {
@@ -233,7 +242,11 @@ pub enum Command {
         after: PathBuf,
         #[arg(long)]
         module: bool,
-        #[arg(long, default_value = "0.5", help = "least shared structure to call two functions a pair")]
+        #[arg(
+            long,
+            default_value = "0.5",
+            help = "least shared structure to call two functions a pair"
+        )]
         threshold: f64,
     },
 
@@ -281,7 +294,10 @@ pub enum Command {
 
     #[command(about = "List the built in automation markers")]
     Markers {
-        #[arg(long, help = "only the tells a tool leaves, or only the tells hiding one leaves")]
+        #[arg(
+            long,
+            help = "only the tells a tool leaves, or only the tells hiding one leaves"
+        )]
         kind: Option<String>,
         #[arg(long)]
         group: Option<String>,
@@ -315,9 +331,7 @@ pub enum VmCommand {
     },
 
     #[command(about = "Print a decoded instruction stream")]
-    Listing {
-        program: PathBuf,
-    },
+    Listing { program: PathBuf },
 
     #[command(about = "Lift a decoded instruction stream to readable javascript")]
     Lift {
@@ -468,8 +482,21 @@ pub enum SandboxCommand {
         host: String,
         #[arg(long, default_value_t = 8099)]
         port: u16,
-        #[arg(long, help = "open the page in a real Chrome and store what it sends back")]
+        #[arg(
+            long,
+            help = "open the page in a real Chrome and store what it sends back"
+        )]
         open: bool,
+        #[arg(
+            long,
+            help = "walk the whole object graph, for targets that enumerate the surface"
+        )]
+        graph: bool,
+        #[arg(
+            long,
+            help = "a recorded canvas and WebGL call list for the page to answer"
+        )]
+        calls: Option<PathBuf>,
         #[arg(long, help = "label the profile the browser sends back")]
         label: Option<String>,
         #[arg(long, default_value_t = wre_cdp::chrome::DEFAULT_PORT, help = "debugging port for the browser --open drives")]
@@ -590,7 +617,5 @@ pub enum ClientCommand {
     },
 
     #[command(about = "Summarise a diagnostics report")]
-    Diag {
-        path: PathBuf,
-    },
+    Diag { path: PathBuf },
 }

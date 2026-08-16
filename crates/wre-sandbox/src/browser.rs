@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -25,10 +27,22 @@ pub struct Request {
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub body: Option<String>,
+    #[serde(default, rename = "bodyBytes", skip_serializing_if = "Option::is_none")]
+    pub body_base64: Option<String>,
     #[serde(default)]
     pub at: f64,
     #[serde(default)]
     pub source: String,
+}
+
+impl Request {
+    pub fn bytes(&self) -> Option<Vec<u8>> {
+        if let Some(encoded) = &self.body_base64 {
+            return STANDARD.decode(encoded).ok();
+        }
+
+        self.body.as_ref().map(|text| text.as_bytes().to_vec())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,9 +54,22 @@ pub struct Answer {
     pub headers: Vec<(String, String)>,
 }
 
+impl Answer {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 impl Default for Answer {
     fn default() -> Self {
-        Self { status: 201, body: r#"{"success":true}"#.to_string(), headers: Vec::new() }
+        Self {
+            status: 201,
+            body: r#"{"success":true}"#.to_string(),
+            headers: Vec::new(),
+        }
     }
 }
 
@@ -84,7 +111,10 @@ impl Held {
 
 impl CookieStore for Held {
     fn read(&self) -> String {
-        let values = self.values.lock().unwrap_or_else(|error| error.into_inner());
+        let values = self
+            .values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         values
             .iter()
             .map(|(name, value)| format!("{name}={value}"))
@@ -98,7 +128,10 @@ impl CookieStore for Held {
             return;
         };
 
-        let mut values = self.values.lock().unwrap_or_else(|error| error.into_inner());
+        let mut values = self
+            .values
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
 
         match values.iter_mut().find(|(known, _)| known == name.trim()) {
             Some(entry) => entry.1 = value.to_string(),
@@ -114,7 +147,10 @@ pub struct Hooks {
 
 impl Default for Hooks {
     fn default() -> Self {
-        Self { transport: Arc::new(Offline), cookies: Arc::new(Held::default()) }
+        Self {
+            transport: Arc::new(Offline),
+            cookies: Arc::new(Held::default()),
+        }
     }
 }
 
@@ -133,8 +169,16 @@ pub fn now_ms() -> f64 {
         .unwrap_or_default()
 }
 
-pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions) -> Result<Browser> {
-    let mut realm = Realm::new(RealmOptions { timers: false, ..options })?;
+pub fn open(
+    profile: &Profile,
+    page: &Page,
+    hooks: Hooks,
+    options: RealmOptions,
+) -> Result<Browser> {
+    let mut realm = Realm::new(RealmOptions {
+        timers: false,
+        ..options
+    })?;
     let sandbox = install(&mut realm, profile)?;
     let misses = sandbox.misses_handle();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -145,11 +189,18 @@ pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions)
         .map_err(|error| Error::msg(format!("the profile did not serialise: {error}")))?;
     realm.register_host("__wreProfileBlob", Box::new(move |_args| Ok(blob.clone())))?;
 
-    let epoch = if page.epoch_ms > 0.0 { page.epoch_ms } else { now_ms() };
+    let epoch = if page.epoch_ms > 0.0 {
+        page.epoch_ms
+    } else {
+        now_ms()
+    };
     let described = page.describe()?;
     let mut described = described;
     described["epoch"] = json!(epoch);
-    realm.register_host("__wrePageBlob", Box::new(move |_args| Ok(described.clone())))?;
+    realm.register_host(
+        "__wrePageBlob",
+        Box::new(move |_args| Ok(described.clone())),
+    )?;
 
     realm.register_host("__wreRealNow", Box::new(|_args| Ok(json!(now_ms()))))?;
 
@@ -175,7 +226,10 @@ pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions)
     )?;
 
     let reader = Arc::clone(&hooks.cookies);
-    realm.register_host("__wreCookieRead", Box::new(move |_args| Ok(json!(reader.read()))))?;
+    realm.register_host(
+        "__wreCookieRead",
+        Box::new(move |_args| Ok(json!(reader.read()))),
+    )?;
 
     let writer = Arc::clone(&hooks.cookies);
     realm.register_host(
@@ -194,7 +248,11 @@ pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions)
     realm.register_host(
         "__wreCanvasImage",
         Box::new(move |args| {
-            let key = args.first().and_then(Value::as_str).unwrap_or_default().to_string();
+            let key = args
+                .first()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
 
             if let Some(found) = images.get(&key) {
                 return Ok(json!(found));
@@ -234,6 +292,8 @@ pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions)
         }),
     )?;
 
+    crate::host::install(&mut realm)?;
+
     let control = realm.attach(BROWSER, "wre:browser")?;
 
     let names = realm.invoke(&control, "masked", &[])?;
@@ -247,7 +307,13 @@ pub fn open(profile: &Profile, page: &Page, hooks: Hooks, options: RealmOptions)
         }
     }
 
-    Ok(Browser { realm, control, sandbox, misses, requests })
+    Ok(Browser {
+        realm,
+        control,
+        sandbox,
+        misses,
+        requests,
+    })
 }
 
 fn measure(
@@ -271,7 +337,11 @@ fn measure(
         }
     };
 
-    let scale = if probe_size > 0.0 { size / probe_size } else { 1.0 };
+    let scale = if probe_size > 0.0 {
+        size / probe_size
+    } else {
+        1.0
+    };
     let width = per_character * scale * text.chars().count() as f64;
 
     (width * 1000.0).round() / 1000.0
@@ -338,7 +408,10 @@ impl Browser {
     }
 
     pub fn requests(&self) -> Vec<Request> {
-        let list = self.requests.lock().unwrap_or_else(|error| error.into_inner());
+        let list = self
+            .requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         list.clone()
     }
 
@@ -356,12 +429,15 @@ impl Browser {
     }
 
     pub fn settle(&mut self, rounds: usize) -> Result<usize> {
-        let ran = self.realm.invoke(&self.control, "settle", &[json!(rounds)])?;
+        let ran = self
+            .realm
+            .invoke(&self.control, "settle", &[json!(rounds)])?;
         Ok(ran.as_u64().unwrap_or_default() as usize)
     }
 
     pub fn fire(&mut self, kind: &str, detail: Value) -> Result<()> {
-        self.realm.invoke(&self.control, "fire", &[json!(kind), detail])?;
+        self.realm
+            .invoke(&self.control, "fire", &[json!(kind), detail])?;
         Ok(())
     }
 
@@ -391,8 +467,11 @@ impl Browser {
     }
 
     pub fn charge_on(&mut self, global: &str, property: &str, ms: f64) -> Result<()> {
-        self.realm
-            .invoke(&self.control, "chargeOn", &[json!(global), json!(property), json!(ms)])?;
+        self.realm.invoke(
+            &self.control,
+            "chargeOn",
+            &[json!(global), json!(property), json!(ms)],
+        )?;
         Ok(())
     }
 
@@ -462,23 +541,39 @@ fn expand(event: &Motion) -> Vec<(String, Value)> {
 
     match event {
         Motion::PointerMove { .. } => vec![
-            ("pointermove".to_string(), with(json!({ "pointerType": "mouse", "isPrimary": true }))),
+            (
+                "pointermove".to_string(),
+                with(json!({ "pointerType": "mouse", "isPrimary": true })),
+            ),
             ("mousemove".to_string(), with(json!({ "buttons": 0 }))),
         ],
         Motion::PointerDown { button, .. } => vec![
             (
                 "pointerdown".to_string(),
-                with(json!({ "pointerType": "mouse", "isPrimary": true, "button": button, "buttons": 1, "pressure": 0.5 })),
+                with(
+                    json!({ "pointerType": "mouse", "isPrimary": true, "button": button, "buttons": 1, "pressure": 0.5 }),
+                ),
             ),
-            ("mousedown".to_string(), with(json!({ "button": button, "buttons": 1 }))),
+            (
+                "mousedown".to_string(),
+                with(json!({ "button": button, "buttons": 1 })),
+            ),
         ],
         Motion::PointerUp { button, .. } => vec![
             (
                 "pointerup".to_string(),
-                with(json!({ "pointerType": "mouse", "isPrimary": true, "button": button, "buttons": 0 })),
+                with(
+                    json!({ "pointerType": "mouse", "isPrimary": true, "button": button, "buttons": 0 }),
+                ),
             ),
-            ("mouseup".to_string(), with(json!({ "button": button, "buttons": 0 }))),
-            ("click".to_string(), with(json!({ "button": button, "detail": 1 }))),
+            (
+                "mouseup".to_string(),
+                with(json!({ "button": button, "buttons": 0 })),
+            ),
+            (
+                "click".to_string(),
+                with(json!({ "button": button, "detail": 1 })),
+            ),
         ],
         Motion::TouchStart { .. } => vec![("touchstart".to_string(), with(json!({})))],
         Motion::TouchMove { .. } => vec![("touchmove".to_string(), with(json!({})))],

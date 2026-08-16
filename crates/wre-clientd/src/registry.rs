@@ -17,5 +17,8 @@ pub fn build() -> Result<Registry, String> {
     #[cfg(feature = "target-akamai")]
     registry.register(wre_client_akamai::registration())?;
 
+    #[cfg(feature = "target-kasada")]
+    registry.register(wre_client_kasada::registration())?;
+
     Ok(registry)
 }

@@ -8,6 +8,8 @@
   var hostMeasure = __wreMeasureText;
   var hostMiss = __wreMiss;
   var hostReal = __wreRealNow;
+  var hostEntropy = __wreEntropy;
+  var hostDigest = __wreDigest;
 
   var epoch = page.epoch;
   var realStart = hostReal();
@@ -75,6 +77,59 @@
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
     return hash.toString(16);
+  }
+
+  var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  function toBase64(bytes) {
+    var out = "";
+
+    for (var index = 0; index < bytes.length; index += 3) {
+      var first = bytes[index];
+      var second = index + 1 < bytes.length ? bytes[index + 1] : 0;
+      var third = index + 2 < bytes.length ? bytes[index + 2] : 0;
+      var word = (first << 16) | (second << 8) | third;
+
+      out += BASE64.charAt((word >> 18) & 63);
+      out += BASE64.charAt((word >> 12) & 63);
+      out += index + 1 < bytes.length ? BASE64.charAt((word >> 6) & 63) : "=";
+      out += index + 2 < bytes.length ? BASE64.charAt(word & 63) : "=";
+    }
+
+    return out;
+  }
+
+  function fromBase64(text) {
+    var clean = String(text).replace(/[^A-Za-z0-9+/]/g, "");
+    var bytes = [];
+    var held = 0;
+    var bits = 0;
+
+    for (var index = 0; index < clean.length; index += 1) {
+      held = (held << 6) | BASE64.indexOf(clean.charAt(index));
+      bits += 6;
+
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push((held >> bits) & 255);
+      }
+    }
+
+    return bytes;
+  }
+
+  function bytesOf(value) {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    if (value && typeof value === "object" && value.__parts) {
+      var joined = value.__parts.join("");
+      var out = new Uint8Array(joined.length);
+      for (var index = 0; index < joined.length; index += 1) out[index] = joined.charCodeAt(index) & 255;
+      return out;
+    }
+    return null;
   }
 
   var EventTargetBase = globalThis.EventTarget;
@@ -1348,14 +1403,26 @@
     return null;
   };
 
+  function outgoing(body) {
+    if (body === undefined || body === null) return { body: null };
+
+    var bytes = bytesOf(body);
+    if (bytes) return { body: null, bodyBytes: toBase64(bytes) };
+
+    return { body: String(body) };
+  }
+
   XMLHttpRequest.prototype.send = function (body) {
     requestCount += 1;
+
+    var carried = outgoing(body);
 
     var answer = hostRequest({
       method: this.__method || "GET",
       url: this.__url || "",
       headers: this.__headers,
-      body: body === undefined || body === null ? null : String(body),
+      body: carried.body,
+      bodyBytes: carried.bodyBytes,
       at: now(),
       source: "xhr"
     });
@@ -1456,11 +1523,14 @@
     var url = typeof input === "string" ? input : (input && input.url) || "";
     var settings = options || {};
 
+    var carried = outgoing(settings.body);
+
     var answer = hostRequest({
       method: String(settings.method || "GET"),
       url: String(url),
       headers: headerPairs(settings.headers),
-      body: settings.body === undefined || settings.body === null ? null : String(settings.body),
+      body: carried.body,
+      bodyBytes: carried.bodyBytes,
       at: now(),
       source: "fetch"
     });
@@ -1476,20 +1546,35 @@
   }
 
   var Blob = tag(function Blob(parts, options) {
-    var size = 0;
-    (parts || []).forEach(function (part) { size += String(part).length; });
-    this.size = size;
+    var held = [];
+
+    (parts || []).forEach(function (part) {
+      var bytes = bytesOf(part);
+
+      if (bytes) {
+        var text = "";
+        for (var index = 0; index < bytes.length; index += 1) text += String.fromCharCode(bytes[index]);
+        held.push(text);
+        return;
+      }
+
+      held.push(String(part));
+    });
+
+    Object.defineProperty(this, "__parts", { value: held, enumerable: false });
+    this.size = held.reduce(function (total, part) { return total + part.length; }, 0);
     this.type = (options && options.type) || "";
   }, "Blob");
 
   Blob.prototype.text = function () {
-    return Promise.resolve("");
+    return Promise.resolve(this.__parts ? this.__parts.join("") : "");
   };
   Blob.prototype.slice = function () {
     return this;
   };
   Blob.prototype.arrayBuffer = function () {
-    return Promise.resolve(new ArrayBuffer(0));
+    var bytes = bytesOf(this) || new Uint8Array(0);
+    return Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   };
 
   var FormData = tag(function FormData() {
@@ -1996,23 +2081,77 @@
     throw new TypeError("Illegal constructor");
   }, "Crypto");
 
+  function entropy(count) {
+    return fromBase64(hostEntropy(count));
+  }
+
   Crypto.prototype.getRandomValues = function (target) {
-    for (var index = 0; index < target.length; index += 1) {
-      target[index] = Math.floor(Math.random() * 256);
+    if (!ArrayBuffer.isView(target)) {
+      throw new TypeError(
+        "Failed to execute 'getRandomValues' on 'Crypto': parameter 1 is not of type 'ArrayBufferView'."
+      );
     }
+
+    if (target.byteLength > 65536) {
+      throw new DOMException(
+        "The ArrayBufferView's byte length (" + target.byteLength + ") exceeds the number of bytes of entropy available via this API (65536).",
+        "QuotaExceededError"
+      );
+    }
+
+    var bytes = entropy(target.byteLength);
+    var view = new Uint8Array(target.buffer, target.byteOffset, target.byteLength);
+    for (var index = 0; index < view.length; index += 1) view[index] = bytes[index];
+
     return target;
   };
 
   Crypto.prototype.randomUUID = function () {
-    var hex = "0123456789abcdef";
-    var out = "";
-    for (var index = 0; index < 36; index += 1) {
-      if (index === 8 || index === 13 || index === 18 || index === 23) out += "-";
-      else if (index === 14) out += "4";
-      else out += hex.charAt(Math.floor(Math.random() * 16));
+    var bytes = entropy(16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    var hex = [];
+    for (var index = 0; index < 16; index += 1) {
+      hex.push((bytes[index] + 0x100).toString(16).slice(1));
     }
-    return out;
+
+    return [
+      hex.slice(0, 4).join(""),
+      hex.slice(4, 6).join(""),
+      hex.slice(6, 8).join(""),
+      hex.slice(8, 10).join(""),
+      hex.slice(10, 16).join("")
+    ].join("-");
   };
+
+  var SubtleCrypto = tag(function SubtleCrypto() {
+    throw new TypeError("Illegal constructor");
+  }, "SubtleCrypto");
+
+  SubtleCrypto.prototype.digest = function (algorithm, data) {
+    var name = typeof algorithm === "string" ? algorithm : (algorithm && algorithm.name) || "";
+    var bytes = bytesOf(data);
+
+    if (!bytes) {
+      return Promise.reject(
+        new TypeError("Failed to execute 'digest' on 'SubtleCrypto': parameter 2 is not of type 'BufferSource'.")
+      );
+    }
+
+    try {
+      var out = fromBase64(hostDigest(String(name), toBase64(bytes)));
+      return Promise.resolve(new Uint8Array(out).buffer);
+    } catch (error) {
+      return Promise.reject(new DOMException("Unrecognized algorithm name", "NotSupportedError"));
+    }
+  };
+
+  var subtle = Object.create(SubtleCrypto.prototype);
+
+  define(Crypto.prototype, "subtle", function () {
+    return subtle;
+  });
 
   var VisualViewport = tag(function VisualViewport() {
     throw new TypeError("Illegal constructor");
@@ -2476,9 +2615,6 @@
   define(visualViewport, "height", function () { return globalThis.innerHeight; });
 
   var crypto = Object.create(Crypto.prototype);
-  crypto.subtle = {
-    digest: function () { return Promise.reject(new Error("not supported")); }
-  };
 
   var screenOrientation = profile.orientation
     ? { angle: profile.orientation.angle, type: profile.orientation.type,
@@ -2827,6 +2963,8 @@
   delete globalThis.__wreMeasureText;
   delete globalThis.__wreMiss;
   delete globalThis.__wreRealNow;
+  delete globalThis.__wreEntropy;
+  delete globalThis.__wreDigest;
 
   return {
     advance: function (ms) {

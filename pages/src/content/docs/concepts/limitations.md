@@ -19,9 +19,11 @@ The profile set is whatever `wreq-util` ships, so a browser release is only reac
 
 ## The sandbox
 
-The sandbox has no document object model. A target that creates an element and measures it will not run. The capture page fills the layout, canvas and font tables that work would need, and nothing reads them yet.
+The property profile the sensor clients mount has no layout. A target that creates an element and measures it gets zero. A graph profile carries a measured layout table and answers from it, for the elements the capture measured; anything outside that set records a miss.
 
-The realm is a real engine with a fake environment. A target that reaches for something the snapshot did not capture gets `undefined`, which appears in the probe records.
+The realm is a real engine with a fake environment. A target that reaches for something the capture did not reach gets `undefined`, which appears in the miss log. A graph replays what was walked and invents nothing, so a surface missing from the capture is missing from the realm.
+
+Canvas and WebGL readbacks come from a recorded reply table keyed by the operations that produced them. Without a table for the operations a target performs, the readback is blank and the run records a miss.
 
 ## Build comparison
 

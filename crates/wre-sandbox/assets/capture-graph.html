@@ -1,0 +1,1969 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wre sandbox graph capture</title>
+<style>
+  :root { color-scheme: light dark; }
+  #chrome {
+    margin: 0 auto;
+    padding: 16px 16px 64px;
+    max-width: 860px;
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 20px; opacity: 0.75; }
+  fieldset { border: 1px solid rgba(128,128,128,0.4); border-radius: 6px; margin: 0 0 16px; padding: 12px 14px; }
+  legend { padding: 0 6px; font-weight: 600; }
+  label { display: block; margin: 8px 0 4px; font-weight: 600; }
+  input, textarea {
+    width: 100%; box-sizing: border-box; padding: 8px;
+    border: 1px solid rgba(128,128,128,0.5); border-radius: 4px;
+    font: inherit; background: transparent; color: inherit;
+  }
+  textarea { min-height: 60px; resize: vertical; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; margin: 12px 8px 0 0;
+    border: 1px solid rgba(128,128,128,0.5); border-radius: 4px;
+    background: transparent; color: inherit; cursor: pointer;
+  }
+  button[disabled] { opacity: 0.5; cursor: default; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px 4px 0; vertical-align: top; }
+  th { width: 200px; font-weight: 600; }
+  td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+  #status { margin-top: 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(128,128,128,0.5); display: none; }
+  #status.on { display: block; }
+  ul.findings { margin: 8px 0 0; padding-left: 20px; font-size: 13px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head><body>
+<main id="chrome">
+<h1>wre sandbox graph capture</h1>
+<p class="lead">Walks this browser's object graph, measures the tables <code>wre</code> replays from, and hands both to <code>wre</code>. Open it in the browser you want to replay, on the device you want to replay. It runs on one page load and takes a few seconds; leave the tab in front until the last line lands. Nothing here is generated or guessed.</p>
+
+<fieldset>
+  <legend>Label</legend>
+  <label for="label">Name this device</label>
+  <input id="label" placeholder="MacBook Pro M3, Chrome 140">
+  <label for="notes">Notes</label>
+  <textarea id="notes" placeholder="Where it came from, screen scaling, anything that would change the numbers"></textarea>
+</fieldset>
+
+<fieldset>
+  <legend>What was measured</legend>
+  <table id="summary"></table>
+  <ul class="findings" id="findings"></ul>
+</fieldset>
+
+<button id="send">Send to wre</button>
+<button id="download">Download JSON</button>
+<div id="status"></div>
+</main>
+
+<script>
+(function () {
+  var snapshotText = null;
+  var snapshotFailure = null;
+
+  try {
+    snapshotText = (function () {
+    var MAX_OBJECTS = 80000;
+    var MAX_STRING = 8192;
+
+    var MAX_DEPTH = 5;
+
+    var objects = [];
+    var ids = new Map();
+    var pending = [];
+    var depth = 0;
+
+    var stash = null;
+
+    try {
+      stash = globalThis.__PRISTINE || null;
+    } catch (error) {}
+
+    var pick = function (key, fallback) {
+      return stash && typeof stash[key] === "function" ? stash[key] : fallback;
+    };
+
+    var funcToString = pick("funcToString", Function.prototype.toString);
+    var objToString = pick("objToString", Object.prototype.toString);
+    var getPrototypeOf = pick("getPrototypeOf", Object.getPrototypeOf);
+    var getOwnPropertyNames = pick("getOwnPropertyNames", Object.getOwnPropertyNames);
+    var getOwnPropertyDescriptor = pick("getOwnPropertyDescriptor", Object.getOwnPropertyDescriptor);
+    var getOwnPropertySymbols = pick("getOwnPropertySymbols", Object.getOwnPropertySymbols);
+    var isFrozen = pick("isFrozen", Object.isFrozen);
+    var isExtensible = pick("isExtensible", Object.isExtensible);
+
+    var isCallable = function (value) {
+      return typeof value === "function";
+    };
+
+    var freeDepth = false;
+
+    var idOf = function (value) {
+      if (ids.has(value)) return ids.get(value);
+      if (objects.length >= MAX_OBJECTS || (depth >= MAX_DEPTH && !freeDepth)) return null;
+
+      var id = objects.length;
+      ids.set(value, id);
+      objects.push(null);
+      pending.push([id, value, freeDepth ? depth : depth + 1]);
+      return id;
+    };
+
+    var encode = function (value) {
+      var type = typeof value;
+
+      if (value === null) return { k: "null" };
+      if (type === "undefined") return { k: "undefined" };
+      if (type === "boolean" || type === "number") return { k: type, v: value };
+      if (type === "bigint") return { k: "bigint", v: String(value) };
+      if (type === "symbol") return { k: "symbol", v: String(value) };
+      if (type === "string") return { k: "string", v: value.length > MAX_STRING ? value.slice(0, MAX_STRING) : value, cut: value.length > MAX_STRING };
+
+      if (type === "function" && !native(value)) return { k: "page", t: "function" };
+
+      var id = idOf(value);
+      return id === null ? { k: "elided" } : { k: "ref", id: id };
+    };
+
+    var native;
+
+    native = function (value) {
+      try {
+        return /\{\s*\[native code\]\s*\}/.test(funcToString.call(value));
+      } catch (error) {
+        return false;
+      }
+    };
+
+    var protoInstance = new WeakMap();
+
+    var interesting = null;
+
+    var describe = function (target) {
+      var record = { type: isCallable(target) ? "function" : "object", props: {} };
+      var isWindow = target === window;
+      var isNode = false;
+
+      try {
+        isNode = target instanceof Node && target !== document;
+      } catch (error) {}
+
+      try {
+        freeDepth = true;
+        var parent = getPrototypeOf(target);
+        if (parent && !protoInstance.has(parent)) protoInstance.set(parent, target);
+        record.proto = encode(parent);
+        freeDepth = false;
+      } catch (error) {
+        freeDepth = false;
+        record.proto = { k: "undefined" };
+      }
+
+      if (isCallable(target)) {
+        try {
+          record.name = target.name;
+          record.length = target.length;
+          record.source = funcToString.call(target).slice(0, 2048);
+        } catch (error) {}
+      }
+
+      try {
+        record.tag = objToString.call(target);
+      } catch (error) {}
+
+      try {
+        record.frozen = isFrozen(target);
+        record.extensible = isExtensible(target);
+      } catch (error) {}
+
+      var names;
+
+      try {
+        names = getOwnPropertyNames(target);
+      } catch (error) {
+        return record;
+      }
+
+      for (var index = 0; index < names.length; index += 1) {
+        var key = names[index];
+        if (key === "__PRISTINE") continue;
+        var descriptor;
+
+        try {
+          descriptor = getOwnPropertyDescriptor(target, key);
+        } catch (error) {
+          continue;
+        }
+
+        if (!descriptor) continue;
+
+        var entry = { e: descriptor.enumerable, c: descriptor.configurable };
+        var platform = function (value) {
+          try {
+            var tag = objToString.call(value);
+            return tag !== "[object Object]" && tag !== "[object Array]" && tag !== "[object Function]";
+          } catch (error) {
+            return false;
+          }
+        };
+
+        var skipValue =
+          isWindow &&
+          !interesting[key] &&
+          descriptor.value !== null &&
+          ((typeof descriptor.value === "object" && !platform(descriptor.value)) ||
+            (typeof descriptor.value === "function" && !native(descriptor.value)));
+
+        if (skipValue) {
+          record.props[key] = { e: entry.e, c: entry.c, w: descriptor.writable, value: { k: "page", t: typeof descriptor.value } };
+          continue;
+        }
+
+        if ("value" in descriptor) {
+          entry.w = descriptor.writable;
+          freeDepth = key === "prototype" || key === "constructor";
+          entry.value = encode(descriptor.value);
+          freeDepth = false;
+        } else {
+          entry.accessor = true;
+          if (descriptor.get) entry.get = encode(descriptor.get);
+          if (descriptor.set) entry.set = encode(descriptor.set);
+
+          try {
+            var source = protoInstance.get(target) || target;
+            var read = source[key];
+            entry.read = isNode && read !== null && typeof read === "object" ? { k: "node" } : encode(read);
+            if (source !== target) entry.viaInstance = true;
+          } catch (error) {
+            entry.threw = String(error && error.message).slice(0, 120);
+          }
+        }
+
+        record.props[key] = entry;
+      }
+
+      try {
+        var symbols = getOwnPropertySymbols(target);
+
+        for (var s = 0; s < symbols.length; s += 1) {
+          var symbol = symbols[s];
+          var symbolDescriptor = getOwnPropertyDescriptor(target, symbol);
+          if (!symbolDescriptor) continue;
+
+          record.props["@@" + String(symbol).replace(/^Symbol\(|\)$/g, "")] = {
+            e: symbolDescriptor.enumerable,
+            c: symbolDescriptor.configurable,
+            symbol: true,
+            value: "value" in symbolDescriptor ? encode(symbolDescriptor.value) : { k: "undefined" },
+          };
+        }
+      } catch (error) {}
+
+      return record;
+    };
+
+    var rootNames = [
+      "window", "document", "navigator", "screen", "location", "history", "performance", "crypto", "chrome",
+      "localStorage", "sessionStorage", "console", "KPSDK", "Intl", "WebAssembly",
+      "XMLHttpRequest", "WebSocket", "MediaRecorder", "Notification", "DataTransfer", "File", "FileReader",
+      "ImageData", "DOMException", "NodeFilter", "XPathResult", "KeyboardEvent", "MouseEvent", "Event",
+      "Element", "HTMLElement", "HTMLAllCollection", "Document", "Window", "Node", "CSSStyleDeclaration",
+      "WebGLRenderingContext", "WebGL2RenderingContext", "HTMLCanvasElement", "CanvasRenderingContext2D",
+      "HTMLMediaElement", "HTMLAudioElement", "HTMLVideoElement", "HTMLIFrameElement", "HTMLScriptElement",
+      "HTMLDivElement", "HTMLInputElement", "HTMLFormElement", "AudioContext", "OfflineAudioContext",
+      "RTCPeerConnection", "SpeechSynthesis", "speechSynthesis", "Worker", "Blob", "URL", "TextEncoder",
+      "TextDecoder", "Proxy", "Reflect", "getComputedStyle", "requestAnimationFrame", "setTimeout",
+      "clearTimeout", "setInterval", "clearInterval", "eval", "matchMedia", "isSecureContext",
+      "innerWidth", "innerHeight", "outerWidth", "outerHeight", "devicePixelRatio", "origin", "top", "parent", "self",
+      "visualViewport", "locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar",
+      "VisualViewport", "BarProp", "UserActivation", "Performance", "PerformanceNavigation",
+      "PerformanceTiming", "ScreenOrientation", "Screen", "Navigator", "Location", "History",
+    ];
+
+    var builtinNames = [
+      "Array", "String", "Object", "Function", "Number", "Boolean", "Symbol", "Math", "JSON", "Date",
+      "RegExp", "Error", "TypeError", "RangeError", "SyntaxError", "EvalError", "ReferenceError", "URIError",
+      "Map", "Set", "WeakMap", "WeakSet", "Promise", "ArrayBuffer", "SharedArrayBuffer", "DataView",
+      "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+      "Float32Array", "Float64Array", "BigInt", "BigInt64Array", "BigUint64Array", "globalThis",
+      "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "encodeURIComponent", "decodeURI",
+      "decodeURIComponent", "escape", "unescape", "atob", "btoa", "fetch", "structuredClone", "queueMicrotask",
+      "postMessage", "addEventListener", "removeEventListener", "dispatchEvent", "getSelection", "scrollTo",
+      "requestIdleCallback", "cancelAnimationFrame", "open", "close", "focus", "blur", "alert", "confirm", "prompt",
+    ];
+
+    interesting = {};
+    for (var w = 0; w < rootNames.length; w += 1) interesting[rootNames[w]] = true;
+    for (var b = 0; b < builtinNames.length; b += 1) interesting[builtinNames[b]] = true;
+
+    var roots = {};
+
+    for (var r = 0; r < rootNames.length; r += 1) {
+      var name = rootNames[r];
+
+      try {
+        if (!(name in window)) continue;
+        roots[name] = encode(window[name]);
+      } catch (error) {}
+    }
+
+    var samples = {};
+
+    var sample = function (name, produce) {
+      try {
+        samples[name] = encode(produce());
+      } catch (error) {
+        samples[name] = { k: "threw", v: String(error && error.message).slice(0, 200) };
+      }
+    };
+
+    sample("document.createElement(canvas)", function () { return document.createElement("canvas"); });
+    sample("document.createElement(div)", function () { return document.createElement("div"); });
+    sample("document.createElement(iframe)", function () { return document.createElement("iframe"); });
+    sample("document.createElement(video)", function () { return document.createElement("video"); });
+    sample("document.createElement(audio)", function () { return document.createElement("audio"); });
+    sample("document.documentElement", function () { return document.documentElement; });
+    sample("document.body", function () { return document.body; });
+    sample("new Error()", function () { return new Error("probe"); });
+    sample("performance.timing", function () { return performance.timing; });
+    sample("performance.navigation", function () { return performance.navigation; });
+    sample("performance.memory", function () { return performance.memory; });
+    sample("navigator.connection", function () { return navigator.connection; });
+    sample("navigator.userAgentData", function () { return navigator.userAgentData; });
+    sample("navigator.plugins", function () { return navigator.plugins; });
+    sample("navigator.mimeTypes", function () { return navigator.mimeTypes; });
+    sample("navigator.mediaDevices", function () { return navigator.mediaDevices; });
+    sample("navigator.permissions", function () { return navigator.permissions; });
+    sample("navigator.storage", function () { return navigator.storage; });
+    sample("navigator.webdriver", function () { return navigator.webdriver; });
+    sample("window.chrome", function () { return window.chrome; });
+    sample("chrome.app", function () { return window.chrome && window.chrome.app; });
+    sample("chrome.runtime", function () { return window.chrome && window.chrome.runtime; });
+    sample("chrome.csi", function () { return window.chrome && window.chrome.csi && window.chrome.csi(); });
+    sample("chrome.loadTimes", function () { return window.chrome && window.chrome.loadTimes && window.chrome.loadTimes(); });
+    sample("matchMedia(prefers-color-scheme: dark)", function () { return matchMedia("(prefers-color-scheme: dark)"); });
+    sample("getComputedStyle(document.body)", function () { return getComputedStyle(document.body); });
+
+    var systemColors = {};
+    var computedStyle = {};
+
+    try {
+      var probe = document.createElement("div");
+      document.documentElement.appendChild(probe);
+
+      var colorNames = ["ActiveBorder","ActiveCaption","AppWorkspace","Background","ButtonFace","ButtonHighlight","ButtonShadow","ButtonText","CaptionText","GrayText","Highlight","HighlightText","InactiveBorder","InactiveCaption","InactiveCaptionText","InfoBackground","InfoText","Menu","MenuText","Scrollbar","ThreeDDarkShadow","ThreeDFace","ThreeDHighlight","ThreeDLightShadow","ThreeDShadow","Window","WindowFrame","WindowText","FakeColor","-moz-ButtonDefault","-moz-ButtonHoverFace","-moz-ButtonHoverText","-moz-CellHighlight","-moz-CellHighlightText","-moz-Combobox","-moz-ComboboxText","-moz-Dialog","-moz-DialogText","-moz-dragtargetzone","-moz-EvenTreeRow","-moz-Field","-moz-FieldText","-moz-html-CellHighlight","-moz-html-CellHighlightText","-moz-mac-accentdarkestshadow","-moz-mac-accentdarkshadow","-moz-mac-accentface","-moz-mac-accentlightesthighlight","-moz-mac-accentlightshadow","-moz-mac-accentregularhighlight","-moz-mac-accentregularshadow","-moz-mac-chrome-active","-moz-mac-chrome-inactive","-moz-mac-focusring","-moz-mac-menuselect","-moz-mac-menushadow","-moz-mac-menutextselect","-moz-MenuHover","-moz-MenuHoverText","-moz-MenuBarText","-moz-MenuBarHoverText","-moz-nativehyperlinktext","-moz-OddTreeRow","-moz-win-communicationstext","-moz-win-mediatext","-moz-win-accentcolor","-moz-win-accentcolortext","-moz-activehyperlinktext","-moz-default-background-color","-moz-default-color","-moz-hyperlinktext","-moz-visitedhyperlinktext","highlight","selecteditem","selecteditemtext","accentcolor","accentcolortext","canvas","canvastext","field","fieldtext","linktext","visitedtext","activetext","mark","marktext"];
+
+      for (var c = 0; c < colorNames.length; c += 1) {
+        try {
+          probe.style.color = "";
+          probe.style.color = colorNames[c];
+          systemColors[colorNames[c]] = getComputedStyle(probe).color;
+        } catch (error) {}
+      }
+
+      probe.style.color = "";
+      var computed = getComputedStyle(probe);
+
+      for (var index = 0; index < computed.length; index += 1) {
+        var property = computed[index];
+        try {
+          computedStyle[property] = computed.getPropertyValue(property);
+        } catch (error) {}
+      }
+
+      probe.parentNode.removeChild(probe);
+    } catch (error) {}
+
+    var audio = {};
+
+    try {
+      var AudioConstructor = window.AudioContext || window.webkitAudioContext;
+
+      if (AudioConstructor) {
+        var context = new AudioConstructor();
+
+        audio.context = {
+          sampleRate: context.sampleRate,
+          state: context.state,
+          baseLatency: context.baseLatency,
+          outputLatency: context.outputLatency,
+          currentTime: context.currentTime,
+        };
+
+        audio.destination = {
+          channelCount: context.destination.channelCount,
+          channelCountMode: context.destination.channelCountMode,
+          channelInterpretation: context.destination.channelInterpretation,
+          maxChannelCount: context.destination.maxChannelCount,
+          numberOfInputs: context.destination.numberOfInputs,
+          numberOfOutputs: context.destination.numberOfOutputs,
+        };
+
+        audio.listener = {};
+
+        for (var key in context.listener) {
+          try {
+            var member = context.listener[key];
+            if (typeof member === "number" || typeof member === "string") audio.listener[key] = member;
+          } catch (error) {}
+        }
+
+        try {
+          context.close();
+        } catch (error) {}
+      }
+
+      if (window.OfflineAudioContext) {
+        var offline = new window.OfflineAudioContext(1, 44100, 44100);
+        audio.offline = { sampleRate: offline.sampleRate, state: offline.state, length: offline.length, destinationMaxChannelCount: offline.destination.maxChannelCount };
+      }
+    } catch (error) {}
+
+    var values = {};
+
+    var instanceValues = function (name, instance) {
+      if (!instance) return;
+
+      var out = {};
+      var chain = instance;
+      var seenKeys = {};
+
+      while (chain && chain !== Object.prototype) {
+        var names;
+
+        try {
+          names = Object.getOwnPropertyNames(chain);
+        } catch (error) {
+          break;
+        }
+
+        for (var index = 0; index < names.length; index += 1) {
+          var key = names[index];
+          if (seenKeys[key] || key === "constructor") continue;
+          seenKeys[key] = true;
+
+          var descriptor;
+
+          try {
+            descriptor = Object.getOwnPropertyDescriptor(chain, key);
+          } catch (error) {
+            continue;
+          }
+
+          if (!descriptor || !descriptor.get) continue;
+
+          try {
+            var read = instance[key];
+            if (typeof read === "function") continue;
+            out[key] = encode(read);
+          } catch (error) {}
+        }
+
+        try {
+          chain = Object.getPrototypeOf(chain);
+        } catch (error) {
+          break;
+        }
+      }
+
+      values[name] = out;
+    };
+
+    instanceValues("navigator", window.navigator);
+    try {
+      instanceValues("chrome.app", window.chrome && window.chrome.app);
+      instanceValues("chrome.runtime", window.chrome && window.chrome.runtime);
+    } catch (error) {}
+    instanceValues("screen", window.screen);
+    instanceValues("location", window.location);
+    instanceValues("performance", window.performance);
+    instanceValues("history", window.history);
+    instanceValues("document", window.document);
+    instanceValues("crypto", window.crypto);
+    instanceValues("localStorage", window.localStorage);
+    instanceValues("sessionStorage", window.sessionStorage);
+
+    try {
+      instanceValues("navigator.connection", navigator.connection);
+    } catch (error) {}
+
+    try {
+      instanceValues("navigator.plugins", navigator.plugins);
+      instanceValues("navigator.mimeTypes", navigator.mimeTypes);
+
+      for (var p = 0; p < navigator.plugins.length; p += 1) {
+        instanceValues("navigator.plugins." + p, navigator.plugins[p]);
+      }
+
+      for (var m = 0; m < navigator.mimeTypes.length; m += 1) {
+        instanceValues("navigator.mimeTypes." + m, navigator.mimeTypes[m]);
+      }
+    } catch (error) {}
+
+    try {
+      instanceValues("navigator.userAgentData", navigator.userAgentData);
+    } catch (error) {}
+
+    try {
+      var bars = ["locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"];
+
+      for (var b = 0; b < bars.length; b += 1) instanceValues(bars[b], window[bars[b]]);
+
+      instanceValues("visualViewport", window.visualViewport);
+      instanceValues("performance.memory", window.performance && window.performance.memory);
+      instanceValues("performance.timing", window.performance && window.performance.timing);
+      instanceValues("performance.navigation", window.performance && window.performance.navigation);
+      instanceValues("navigator.userActivation", navigator.userActivation);
+      instanceValues("screen.orientation", window.screen && window.screen.orientation);
+      instanceValues("document.head", document.head);
+      instanceValues("document.body", document.body);
+      instanceValues("document.documentElement", document.documentElement);
+    } catch (error) {}
+
+    var guard = 0;
+
+    while (pending.length && guard < MAX_OBJECTS * 4) {
+      guard += 1;
+      var next = pending.shift();
+      depth = next[2];
+      objects[next[0]] = describe(next[1]);
+    }
+
+    return JSON.stringify({
+      at: new Date().toISOString(),
+      href: location.href,
+      userAgent: navigator.userAgent,
+      roots: roots,
+      values: values,
+      systemColors: systemColors,
+      audio: audio,
+      computedStyle: computedStyle,
+      samples: samples,
+      objects: objects,
+      truncated: pending.length > 0,
+    });
+  })();
+  } catch (error) {
+    snapshotFailure = String(error && error.message || error);
+  }
+
+  var settleTraits = null;
+
+  const LAYOUT_KEYS = ["html||","span|white-space: nowrap;|😀😁😂😃😄😅😆😇😈😉😊😋😌😍😎😏😐😑😒😓😔😕😖😗😘😙😚😛😜😝😞😟😠😡😢😣😤😥😦😧😨😩😪😫😬😭😮😯😰😱😲😳😴😵😶😷😸😹😺😻😼😽😾😿🙀🙁🙂🙃🙄🙅🙆🙇🙈🙉🙊🙋🙌🙍🙎🙏","math|white-space: nowrap;|\u003cmrow>\u003cmunderover>\u003cmmultiscripts>\u003cmo>∏\u003c/mo>\u003cmmultiscripts>\u003cmi>𝔈\u003c/mi>\u003cmi>υ\u003c/mi>\u003cmi>τ\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ρ\u003c/mi>\u003cmi>σ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔇\u003c/mi>\u003cmi>π\u003c/mi>\u003cmi>ο\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ν\u003c/mi>\u003cmi>ξ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔄\u003c/mi>\u003cmi>δ\u003c/mi>\u003cmi>γ\u003c/mi>\n                          \u003cmprescripts","div|left: -9999px; width: 1rem; transform: rotate(13deg); font-family: monospace;|","div|position: absolute; width: 1.03in; height: 1.03in;|","div|position: absolute; width: 2.6162cm; height: 2.6162cm;|","div|position: absolute; width: 74.16pt; height: 74.16pt;|","div|position: absolute; width: 1.01in; height: 1.01in;|","div|position: absolute; width: 1.0078in; height: 1.0078in;|","div|position: absolute; width: 1.0104in; height: 1.0104in;|","div|position: absolute; width: 1.0521in; height: 1.0521in;|","div|position: absolute; width: 0.9948in; height: 0.9948in;|","div|position: absolute; width: 1.0050in; height: 1.0050in;|","div|position: absolute; width: 1.0051in; height: 1.0051in;|","div|position: absolute; width: 1.0052in; height: 1.0052in;|","div|position: absolute; width: 1.0053in; height: 1.0053in;|","div|position: absolute; width: 1.0054in; height: 1.0054in;|","div|position: absolute; width: 1.03in; height: 1.01in;|","div|position: absolute; width: 1in; height: 1in;|","div|position: absolute; top: -9999px; left: -9999px; height: 10rem; width: 1px; /* -just to ensure it has layout */\n                        visibility: hidden;|","input|font-size: 100px; margin: -9999px;|","input|margin: -9999px;|","body||","html|||","span|white-space: nowrap;||😀😁😂😃😄😅😆😇😈😉😊😋😌😍😎😏😐😑😒😓😔😕😖😗😘😙😚😛😜😝😞😟😠😡😢😣😤😥😦😧😨😩😪😫😬😭😮😯😰😱😲😳😴😵😶😷😸😹😺😻😼😽😾😿🙀🙁🙂🙃🙄🙅🙆🙇🙈🙉🙊🙋🙌🙍🙎🙏","math|white-space: nowrap;||\u003cmrow>\u003cmunderover>\u003cmmultiscripts>\u003cmo>∏\u003c/mo>\u003cmmultiscripts>\u003cmi>𝔈\u003c/mi>\u003cmi>υ\u003c/mi>\u003cmi>τ\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ρ\u003c/mi>\u003cmi>σ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔇\u003c/mi>\u003cmi>π\u003c/mi>\u003cmi>ο\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ν\u003c/mi>\u003cmi>ξ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔄\u003c/mi>\u003cmi>δ\u003c/mi>\u003cmi>γ\u003c/mi>\n                          \u003cmprescripts","div|left: -9999px; width: 1rem; transform: rotate(13deg); font-family: monospace;||","div|position: absolute; width: 1.03in; height: 1.03in;||","div|position: absolute; width: 2.6162cm; height: 2.6162cm;||","div|position: absolute; width: 74.16pt; height: 74.16pt;||","div|position: absolute; width: 1.01in; height: 1.01in;||","div|position: absolute; width: 1.0078in; height: 1.0078in;||","div|position: absolute; width: 1.0104in; height: 1.0104in;||","div|position: absolute; width: 1.0521in; height: 1.0521in;||","div|position: absolute; width: 0.9948in; height: 0.9948in;||","div|position: absolute; width: 1.0050in; height: 1.0050in;||","div|position: absolute; width: 1.0051in; height: 1.0051in;||","div|position: absolute; width: 1.0052in; height: 1.0052in;||","div|position: absolute; width: 1.0053in; height: 1.0053in;||","div|position: absolute; width: 1.0054in; height: 1.0054in;||","div|position: absolute; width: 1.03in; height: 1.01in;||","div|position: absolute; width: 1in; height: 1in;||","div|position: absolute; top: -9999px; left: -9999px; height: 10rem; width: 1px; /* -just to ensure it has layout */\n                        visibility: hidden;||","input|font-size: 100px; margin: -9999px;|type=button|","input|margin: -9999px;|type=color|","input|margin: -9999px;|type=checkbox|","input|margin: -9999px;|type=range|","input|margin: -9999px;|type=file|","input|margin: -9999px;|type=time|","input|margin: -9999px;|type=submit|","input|margin: -9999px;|type=reset|","input|margin: -9999px;|type=search|","input|margin: -9999px;|type=password|","input|margin: -9999px;|type=tel|","body|||","html||||","span|white-space: nowrap;|||😀😁😂😃😄😅😆😇😈😉😊😋😌😍😎😏😐😑😒😓😔😕😖😗😘😙😚😛😜😝😞😟😠😡😢😣😤😥😦😧😨😩😪😫😬😭😮😯😰😱😲😳😴😵😶😷😸😹😺😻😼😽😾😿🙀🙁🙂🙃🙄🙅🙆🙇🙈🙉🙊🙋🙌🙍🙎🙏","math|white-space: nowrap;|||\u003cmrow>\u003cmunderover>\u003cmmultiscripts>\u003cmo>∏\u003c/mo>\u003cmmultiscripts>\u003cmi>𝔈\u003c/mi>\u003cmi>υ\u003c/mi>\u003cmi>τ\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ρ\u003c/mi>\u003cmi>σ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔇\u003c/mi>\u003cmi>π\u003c/mi>\u003cmi>ο\u003c/mi>\n                          \u003cmprescripts>\u003c/mprescripts>\u003cmi>ν\u003c/mi>\u003cmi>ξ\u003c/mi>\u003c/mmultiscripts>\u003cmmultiscripts>\u003cmi>𝔄\u003c/mi>\u003cmi>δ\u003c/mi>\u003cmi>γ\u003c/mi>\n                          \u003cmprescripts","div|left: -9999px; width: 1rem; transform: rotate(13deg); font-family: monospace;|||","div|position: absolute; width: 1.03in; height: 1.03in;|||","div|position: absolute; width: 2.6162cm; height: 2.6162cm;|||","div|position: absolute; width: 74.16pt; height: 74.16pt;|||","div|position: absolute; width: 1.01in; height: 1.01in;|||","div|position: absolute; width: 1.0078in; height: 1.0078in;|||","div|position: absolute; width: 1.0104in; height: 1.0104in;|||","div|position: absolute; width: 1.0521in; height: 1.0521in;|||","div|position: absolute; width: 0.9948in; height: 0.9948in;|||","div|position: absolute; width: 1.0050in; height: 1.0050in;|||","div|position: absolute; width: 1.0051in; height: 1.0051in;|||","div|position: absolute; width: 1.0052in; height: 1.0052in;|||","div|position: absolute; width: 1.0053in; height: 1.0053in;|||","div|position: absolute; width: 1.0054in; height: 1.0054in;|||","div|position: absolute; width: 1.03in; height: 1.01in;|||","div|position: absolute; width: 1in; height: 1in;|||","div|position: absolute; top: -9999px; left: -9999px; height: 10rem; width: 1px; /* -just to ensure it has layout */\n                        visibility: hidden;|||","input|font-size: 100px; margin: -9999px;|type=button|‼︎|","input|font-size: 100px; margin: -9999px;|type=button|‼️|","input|font-size: 100px; margin: -9999px;|type=button|〰︎|","input|font-size: 100px; margin: -9999px;|type=button|〰️|","input|font-size: 100px; margin: -9999px;|type=button|⬅︎|","input|font-size: 100px; margin: -9999px;|type=button|⬅️|","input|font-size: 100px; margin: -9999px;|type=button|⬆︎|","input|font-size: 100px; margin: -9999px;|type=button|⬆️|","input|font-size: 100px; margin: -9999px;|type=button|⚪︎|","input|font-size: 100px; margin: -9999px;|type=button|⚪️|","input|margin: -9999px;|type=color||","input|margin: -9999px;|type=checkbox||","input|margin: -9999px;|type=range||","input|margin: -9999px;|type=file||","input|margin: -9999px;|type=time||","input|margin: -9999px;|type=submit||","input|margin: -9999px;|type=reset||","input|margin: -9999px;|type=search||","input|margin: -9999px;|type=password||","input|margin: -9999px;|type=tel||","body||||"];
+  const MEDIA_TYPES = ["video/mp4; codecs=\"mp4v.20.8","video/webm; codecs=\"vorbis,vp9\"","audio/ogg; codecs=\"vorbis\"","audio/webm;","audio/wav;","audio/x-mpegurl","video/mp4; codecs=\"avc1.42c00d\"","video/mp4; codecs=bogus","audio/mpeg;","video/mp4; codecs=mp4a.40.2","audio/wav; codecs=\"2\"","audio/aac;","audio/wav; codecs=\"0\"","audio/x-m4a;","audio/wav; codecs=\"1\"","video/3gpp; codecs=\"mp4v.20.8","video/mp2t; codecs=\"avc1.42E01E,mp4a.40.2\"","video/ogg; codecs=\"theora\"","audio/x-mpeg","video/mp4;","video/mpeg;","audio/wave; codecs=2","audio/wave;","video/ogg; codecs=\"theora","video/mp4; codecs=\"avc1.42E01E\"","audio/wave; codecs=0","video/x-matroska; codecs=\"theora","video/webm; codecs=\"vp8","video/mp4; codecs=\"mp4v.20.240","video/mp4; codecs=\"avc1.64001E","audio/mp4; codecs=\"mp4a.40.2\"","video/ogg; codecs=speex","video/ogg; codecs=opus","audio/wave; codecs=1","video/webm; codecs=vorbis","video/x-mpeg"];
+  const SHAPES_NAMES = ["Object","Function","Array","Number","Boolean","String","Symbol","Date","Promise","RegExp","Error","AggregateError","EvalError","RangeError","ReferenceError","SyntaxError","TypeError","URIError","ArrayBuffer","Uint8Array","Int8Array","Uint16Array","Int16Array","Uint32Array","Int32Array","BigUint64Array","BigInt64Array","Uint8ClampedArray","Float32Array","Float64Array","DataView","Map","BigInt","Set","Iterator","WeakMap","WeakSet","FinalizationRegistry","WeakRef","Option","Image","Audio","webkitURL","webkitRTCPeerConnection","webkitMediaStream","WebKitMutationObserver","WebKitCSSMatrix","XPathResult","XPathExpression","XPathEvaluator","XMLSerializer","XMLHttpRequestUpload","XMLHttpRequestEventTarget","XMLHttpRequest","XMLDocument","WritableStreamDefaultWriter","WritableStreamDefaultController","WritableStream","Worker","WindowControlsOverlayGeometryChangeEvent","WindowControlsOverlay","Window","WheelEvent","WebSocket","WebGLVertexArrayObject","WebGLUniformLocation","WebGLTransformFeedback","WebGLTexture","WebGLSync","WebGLShaderPrecisionFormat","WebGLShader","WebGLSampler","WebGLRenderingContext","WebGLRenderbuffer","WebGLQuery","WebGLProgram","WebGLObject","WebGLFramebuffer","WebGLContextEvent","WebGLBuffer","WebGLActiveInfo","WebGL2RenderingContext","WaveShaperNode","VisualViewport","VisibilityStateEntry","VirtualKeyboardGeometryChangeEvent","ViewTransitionTypeSet","ViewTransition","ViewTimeline","VideoPlaybackQuality","VideoFrame","VideoColorSpace","ValidityState","VTTCue","UserActivation","URLSearchParams","URLPattern","URL","UIEvent","TrustedTypePolicyFactory","TrustedTypePolicy","TrustedScriptURL","TrustedScript","TrustedHTML","TreeWalker","TransitionEvent","TransformStreamDefaultController","TransformStream","TrackEvent","TouchList","TouchEvent","Touch","ToggleEvent","TimeRanges","TextUpdateEvent","TextTrackList","TextTrackCueList","TextTrackCue","TextTrack","TextMetrics","TextFormatUpdateEvent","TextFormat","TextEvent","TextEncoderStream","TextEncoder","TextDecoderStream","TextDecoder","Text","TaskSignal","TaskPriorityChangeEvent","TaskController","TaskAttributionTiming","SyncManager","Subscriber","SubmitEvent","StyleSheetList","StyleSheet","StylePropertyMapReadOnly","StylePropertyMap","StorageEvent","Storage","StereoPannerNode","StaticRange","SourceBufferList","SourceBuffer","ShadowRoot","Selection","SecurityPolicyViolationEvent","ScrollTimeline","ScriptProcessorNode","ScreenOrientation","Screen","Scheduling","Scheduler","SVGViewElement","SVGUseElement","SVGUnitTypes","SVGTransformList","SVGTransform","SVGTitleElement","SVGTextPositioningElement","SVGTextPathElement","SVGTextElement","SVGTextContentElement","SVGTSpanElement","SVGSymbolElement","SVGSwitchElement","SVGStyleElement","SVGStringList","SVGStopElement","SVGSetElement","SVGScriptElement","SVGSVGElement","SVGRectElement","SVGRect","SVGRadialGradientElement","SVGPreserveAspectRatio","SVGPolylineElement","SVGPolygonElement","SVGPointList","SVGPoint","SVGPatternElement","SVGPathElement","SVGNumberList","SVGNumber","SVGMetadataElement","SVGMatrix","SVGMaskElement","SVGMarkerElement","SVGMPathElement","SVGLinearGradientElement","SVGLineElement","SVGLengthList","SVGLength","SVGImageElement","SVGGraphicsElement","SVGGradientElement","SVGGeometryElement","SVGGElement","SVGForeignObjectElement","SVGFilterElement","SVGFETurbulenceElement","SVGFETileElement","SVGFESpotLightElement","SVGFESpecularLightingElement","SVGFEPointLightElement","SVGFEOffsetElement","SVGFEMorphologyElement","SVGFEMergeNodeElement","SVGFEMergeElement","SVGFEImageElement","SVGFEGaussianBlurElement","SVGFEFuncRElement","SVGFEFuncGElement","SVGFEFuncBElement","SVGFEFuncAElement","SVGFEFloodElement","SVGFEDropShadowElement","SVGFEDistantLightElement","SVGFEDisplacementMapElement","SVGFEDiffuseLightingElement","SVGFEConvolveMatrixElement","SVGFECompositeElement","SVGFEComponentTransferElement","SVGFEColorMatrixElement","SVGFEBlendElement","SVGEllipseElement","SVGElement","SVGDescElement","SVGDefsElement","SVGComponentTransferFunctionElement","SVGClipPathElement","SVGCircleElement","SVGAnimationElement","SVGAnimatedTransformList","SVGAnimatedString","SVGAnimatedRect","SVGAnimatedPreserveAspectRatio","SVGAnimatedNumberList","SVGAnimatedNumber","SVGAnimatedLengthList","SVGAnimatedLength","SVGAnimatedInteger","SVGAnimatedEnumeration","SVGAnimatedBoolean","SVGAnimatedAngle","SVGAnimateTransformElement","SVGAnimateMotionElement","SVGAnimateElement","SVGAngle","SVGAElement","Response","ResizeObserverSize","ResizeObserverEntry","ResizeObserver","Request","ReportingObserver","ReportBody","ReadableStreamDefaultReader","ReadableStreamDefaultController","ReadableStreamBYOBRequest","ReadableStreamBYOBReader","ReadableStream","ReadableByteStreamController","Range","RadioNodeList","RTCTrackEvent","RTCStatsReport","RTCSessionDescription","RTCSctpTransport","RTCRtpTransceiver","RTCRtpSender","RTCRtpReceiver","RTCPeerConnectionIceEvent","RTCPeerConnectionIceErrorEvent","RTCPeerConnection","RTCIceTransport","RTCIceCandidate","RTCErrorEvent","RTCError","RTCEncodedVideoFrame","RTCEncodedAudioFrame","RTCDtlsTransport","RTCDataChannelEvent","RTCDTMFToneChangeEvent","RTCDTMFSender","RTCCertificate","PromiseRejectionEvent","ProgressEvent","ProcessingInstruction","PopStateEvent","PointerEvent","PluginArray","Plugin","PictureInPictureWindow","PictureInPictureEvent","Permissions","PermissionStatus","PeriodicWave","PerformanceTiming","PerformanceServerTiming","PerformanceScriptTiming","PerformanceResourceTiming","PerformancePaintTiming","PerformanceObserverEntryList","PerformanceObserver","PerformanceNavigationTiming","PerformanceNavigation","PerformanceMeasure","PerformanceMark","PerformanceLongTaskTiming","PerformanceLongAnimationFrameTiming","PerformanceEventTiming","PerformanceEntry","PerformanceElementTiming","Performance","Path2D","PannerNode","PageTransitionEvent","OverconstrainedError","OscillatorNode","OffscreenCanvasRenderingContext2D","OffscreenCanvas","OfflineAudioContext","OfflineAudioCompletionEvent","Observable","NodeList","NodeIterator","Node","NetworkInformation","NavigatorUAData","Navigator","NavigationTransition","NavigationPrecommitController","NavigationHistoryEntry","NavigationDestination","NavigationCurrentEntryChangeEvent","NavigationActivation","Navigation","NavigateEvent","NamedNodeMap","MutationRecord","MutationObserver","MouseEvent","MimeTypeArray","MimeType","MessagePort","MessageEvent","MessageChannel","MediaStreamTrackVideoStats","MediaStreamTrackProcessor","MediaStreamTrackGenerator","MediaStreamTrackEvent","MediaStreamTrackAudioStats","MediaStreamTrack","MediaStreamEvent","MediaStreamAudioSourceNode","MediaStreamAudioDestinationNode","MediaStream","MediaSourceHandle","MediaSource","MediaRecorder","MediaQueryListEvent","MediaQueryList","MediaList","MediaError","MediaEncryptedEvent","MediaElementAudioSourceNode","MediaCapabilities","MathMLElement","Location","LayoutShiftAttribution","LayoutShift","LargestContentfulPaint","KeyframeEffect","KeyboardEvent","IntersectionObserverEntry","IntersectionObserver","InterestEvent","InputEvent","InputDeviceInfo","InputDeviceCapabilities","Ink","ImageData","ImageBitmapRenderingContext","ImageBitmap","IdleDeadline","IIRFilterNode","IDBVersionChangeEvent","IDBTransaction","IDBRequest","IDBRecord","IDBOpenDBRequest","IDBObjectStore","IDBKeyRange","IDBIndex","IDBFactory","IDBDatabase","IDBCursorWithValue","IDBCursor","History","HighlightRegistry","Highlight","Headers","HashChangeEvent","HTMLVideoElement","HTMLUnknownElement","HTMLUListElement","HTMLTrackElement","HTMLTitleElement","HTMLTimeElement","HTMLTextAreaElement","HTMLTemplateElement","HTMLTableSectionElement","HTMLTableRowElement","HTMLTableElement","HTMLTableColElement","HTMLTableCellElement","HTMLTableCaptionElement","HTMLStyleElement","HTMLSpanElement","HTMLSourceElement","HTMLSlotElement","HTMLSelectedContentElement","HTMLSelectElement","HTMLScriptElement","HTMLQuoteElement","HTMLProgressElement","HTMLPreElement","HTMLPictureElement","HTMLParamElement","HTMLParagraphElement","HTMLOutputElement","HTMLOptionsCollection","HTMLOptionElement","HTMLOptGroupElement","HTMLObjectElement","HTMLOListElement","HTMLModElement","HTMLMeterElement","HTMLMetaElement","HTMLMenuElement","HTMLMediaElement","HTMLMarqueeElement","HTMLMapElement","HTMLLinkElement","HTMLLegendElement","HTMLLabelElement","HTMLLIElement","HTMLInputElement","HTMLImageElement","HTMLIFrameElement","HTMLHtmlElement","HTMLHeadingElement","HTMLHeadElement","HTMLHRElement","HTMLFrameSetElement","HTMLFrameElement","HTMLFormElement","HTMLFormControlsCollection","HTMLFontElement","HTMLFieldSetElement","HTMLEmbedElement","HTMLElement","HTMLDocument","HTMLDivElement","HTMLDirectoryElement","HTMLDialogElement","HTMLDetailsElement","HTMLDataListElement","HTMLDataElement","HTMLDListElement","HTMLCollection","HTMLCanvasElement","HTMLButtonElement","HTMLBodyElement","HTMLBaseElement","HTMLBRElement","HTMLAudioElement","HTMLAreaElement","HTMLAnchorElement","HTMLAllCollection","GeolocationPositionError","GeolocationPosition","GeolocationCoordinates","Geolocation","GamepadHapticActuator","GamepadEvent","GamepadButton","Gamepad","GainNode","FormDataEvent","FormData","FontFaceSetLoadEvent","FontFaceSet","FontFace","FocusEvent","FileReader","FileList","File","FeaturePolicy","External","EventTarget","EventSource","EventCounts","Event","ErrorEvent","EncodedVideoChunk","EncodedAudioChunk","ElementInternals","Element","EditContext","DynamicsCompressorNode","DragEvent","DocumentType","DocumentTimeline","DocumentFragment","Document","DelegatedInkTrailPresenter","DelayNode","DecompressionStream","DataTransferItemList","DataTransferItem","DataTransfer","DOMTokenList","DOMStringMap","DOMStringList","DOMRectReadOnly","DOMRectList","DOMRect","DOMQuad","DOMPointReadOnly","DOMPoint","DOMParser","DOMMatrixReadOnly","DOMMatrix","DOMImplementation","DOMException","DOMError","CustomStateSet","CustomEvent","CustomElementRegistry","Crypto","CountQueuingStrategy","ConvolverNode","ContentVisibilityAutoStateChangeEvent","ConstantSourceNode","CompressionStream","CompositionEvent","Comment","CommandEvent","CloseWatcher","CloseEvent","ClipboardEvent","CharacterData","CharacterBoundsUpdateEvent","ChannelSplitterNode","ChannelMergerNode","CaretPosition","CanvasRenderingContext2D","CanvasPattern","CanvasGradient","CanvasCaptureMediaStreamTrack","CSSViewTransitionRule","CSSVariableReferenceValue","CSSUnparsedValue","CSSUnitValue","CSSTranslate","CSSTransition","CSSTransformValue","CSSTransformComponent","CSSSupportsRule","CSSStyleValue","CSSStyleSheet","CSSStyleRule","CSSStyleDeclaration","CSSStartingStyleRule","CSSSkewY","CSSSkewX","CSSSkew","CSSScopeRule","CSSScale","CSSRuleList","CSSRule","CSSRotate","CSSPropertyRule","CSSPositionValue","CSSPositionTryRule","CSSPositionTryDescriptors","CSSPerspective","CSSPageRule","CSSNumericValue","CSSNumericArray","CSSNestedDeclarations","CSSNamespaceRule","CSSMediaRule","CSSMatrixComponent","CSSMathValue","CSSMathSum","CSSMathProduct","CSSMathNegate","CSSMathMin","CSSMathMax","CSSMathInvert","CSSMathClamp","CSSMarginRule","CSSLayerStatementRule","CSSLayerBlockRule","CSSKeywordValue","CSSKeyframesRule","CSSKeyframeRule","CSSImportRule","CSSImageValue","CSSGroupingRule","CSSFontPaletteValuesRule","CSSFontFaceRule","CSSCounterStyleRule","CSSContainerRule","CSSConditionRule","CSSAnimation","CSPViolationReportBody","CDATASection","ByteLengthQueuingStrategy","BrowserCaptureMediaStreamTrack","BroadcastChannel","BlobEvent","Blob","BiquadFilterNode","BeforeUnloadEvent","BeforeInstallPromptEvent","BaseAudioContext","BarProp","AudioWorkletNode","AudioSinkInfo","AudioScheduledSourceNode","AudioProcessingEvent","AudioParamMap","AudioParam","AudioNode","AudioListener","AudioDestinationNode","AudioData","AudioContext","AudioBufferSourceNode","AudioBuffer","Attr","AnimationTimeline","AnimationPlaybackEvent","AnimationEvent","AnimationEffect","Animation","AnalyserNode","AbstractRange","AbortSignal","AbortController","SuppressedError","DisposableStack","AsyncDisposableStack","Float16Array","AbsoluteOrientationSensor","Accelerometer","AudioDecoder","AudioEncoder","AudioWorklet","BatteryManager","Cache","CacheStorage","Clipboard","ClipboardChangeEvent","ClipboardItem","CookieChangeEvent","CookieStore","CookieStoreManager","CreateMonitor","Credential","CredentialsContainer","CryptoKey","DeviceMotionEvent","DeviceMotionEventAcceleration","DeviceMotionEventRotationRate","DeviceOrientationEvent","FederatedCredential","GPU","GPUAdapter","GPUAdapterInfo","GPUBindGroup","GPUBindGroupLayout","GPUBuffer","GPUCanvasContext","GPUCommandBuffer","GPUCommandEncoder","GPUCompilationInfo","GPUCompilationMessage","GPUComputePassEncoder","GPUComputePipeline","GPUDevice","GPUDeviceLostInfo","GPUError","GPUExternalTexture","GPUInternalError","GPUOutOfMemoryError","GPUPipelineError","GPUPipelineLayout","GPUQuerySet","GPUQueue","GPURenderBundle","GPURenderBundleEncoder","GPURenderPassEncoder","GPURenderPipeline","GPUSampler","GPUShaderModule","GPUSupportedFeatures","GPUSupportedLimits","GPUTexture","GPUTextureView","GPUUncapturedErrorEvent","GPUValidationError","GravitySensor","Gyroscope","IdleDetector","ImageCapture","ImageDecoder","ImageTrack","ImageTrackList","Keyboard","KeyboardLayoutMap","LinearAccelerationSensor","MIDIAccess","MIDIConnectionEvent","MIDIInput","MIDIInputMap","MIDIMessageEvent","MIDIOutput","MIDIOutputMap","MIDIPort","MediaDeviceInfo","MediaDevices","MediaKeyMessageEvent","MediaKeySession","MediaKeyStatusMap","MediaKeySystemAccess","MediaKeys","NavigationPreloadManager","NavigatorManagedData","OrientationSensor","PasswordCredential","ProtectedAudience","RelativeOrientationSensor","ScreenDetailed","ScreenDetails","Sensor","SensorErrorEvent","ServiceWorkerRegistration","StorageManager","SubtleCrypto","VideoDecoder","VideoEncoder","VirtualKeyboard","WGSLLanguageFeatures","WebTransport","WebTransportBidirectionalStream","WebTransportDatagramDuplexStream","WebTransportError","Worklet","XRDOMOverlayState","XRLayer","XRWebGLBinding","AudioPlaybackStats","AuthenticatorAssertionResponse","AuthenticatorAttestationResponse","AuthenticatorResponse","PublicKeyCredential","BarcodeDetector","Bluetooth","BluetoothCharacteristicProperties","BluetoothDevice","BluetoothRemoteGATTCharacteristic","BluetoothRemoteGATTDescriptor","BluetoothRemoteGATTServer","BluetoothRemoteGATTService","CaptureController","CrashReportContext","DevicePosture","DigitalCredential","DocumentPictureInPicture","EyeDropper","FetchLaterResult","FileSystemDirectoryHandle","FileSystemFileHandle","FileSystemHandle","FileSystemWritableFileStream","FileSystemObserver","FontData","FragmentDirective","HID","HIDConnectionEvent","HIDDevice","HIDInputReportEvent","IdentityCredential","IdentityCredentialError","IdentityProvider","NavigatorLogin","LanguageDetector","LanguageModel","Lock","LockManager","ServiceWorker","ServiceWorkerContainer","NotRestoredReasonDetails","NotRestoredReasons","OTPCredential","PaymentAddress","PaymentRequest","PaymentRequestUpdateEvent","PaymentResponse","PaymentManager","PaymentMethodChangeEvent","Presentation","PresentationAvailability","PresentationConnection","PresentationConnectionAvailableEvent","PresentationConnectionCloseEvent","PresentationConnectionList","PresentationReceiver","PresentationRequest","PressureObserver","PressureRecord","Serial","SerialPort","SpeechRecognitionPhrase","StorageBucket","StorageBucketManager","Summarizer","Translator","USB","USBAlternateInterface","USBConfiguration","USBConnectionEvent","USBDevice","USBEndpoint","USBInTransferResult","USBInterface","USBIsochronousInTransferPacket","USBIsochronousInTransferResult","USBIsochronousOutTransferPacket","USBIsochronousOutTransferResult","USBOutTransferResult","WakeLock","WakeLockSentinel","XRAnchor","XRAnchorSet","XRBoundedReferenceSpace","XRCPUDepthInformation","XRCamera","XRDepthInformation","XRFrame","XRHand","XRHitTestResult","XRHitTestSource","XRInputSource","XRInputSourceArray","XRInputSourceEvent","XRInputSourcesChangeEvent","XRJointPose","XRJointSpace","XRLightEstimate","XRLightProbe","XRPose","XRRay","XRReferenceSpace","XRReferenceSpaceEvent","XRRenderState","XRRigidTransform","XRSession","XRSessionEvent","XRSpace","XRSystem","XRTransientInputHitTestResult","XRTransientInputHitTestSource","XRView","XRViewerPose","XRViewport","XRWebGLDepthInformation","XRWebGLLayer","XRCompositionLayer","XRProjectionLayer","XRCubeLayer","XRCylinderLayer","XREquirectLayer","XRLayerEvent","XRQuadLayer","XRSubImage","XRWebGLSubImage","XRPlane","XRPlaneSet","XRVisibilityMaskChangeEvent","AnimationTrigger","BackgroundFetchManager","BackgroundFetchRecord","BackgroundFetchRegistration","BluetoothUUID","CSSFontFeatureValuesRule","CSSFunctionDeclarations","CSSFunctionDescriptors","CSSFunctionRule","CSSPseudoElement","ChapterInformation","CropTarget","DocumentPictureInPictureEvent","Fence","FencedFrameConfig","HTMLFencedFrameElement","HTMLGeolocationElement","HTMLUserMediaElement","IntegrityViolationReportBody","InteractionContentfulPaint","PerformanceSoftNavigation","LaunchParams","LaunchQueue","MediaMetadata","MediaSession","Notification","Origin","PageRevealEvent","PageSwapEvent","PerformanceTimingConfidence","PeriodicSyncManager","Profiler","PushManager","PushSubscription","PushSubscriptionOptions","QuotaExceededError","RTCDataChannel","RTCRtpScriptTransform","RemotePlayback","RestrictionTarget","Sanitizer","SharedStorage","SharedStorageWorklet","SharedStorageAppendMethod","SharedStorageClearMethod","SharedStorageDeleteMethod","SharedStorageModifierMethod","SharedStorageSetMethod","SharedWorker","SnapEvent","SpeechGrammar","SpeechGrammarList","SpeechRecognition","SpeechRecognitionErrorEvent","SpeechRecognitionEvent","SpeechSynthesis","SpeechSynthesisErrorEvent","SpeechSynthesisEvent","SpeechSynthesisUtterance","SpeechSynthesisVoice","TimelineTrigger","TimelineTriggerRange","TimelineTriggerRangeList","Viewport","WebSocketError","WebSocketStream","XSLTProcessor","webkitSpeechGrammar","webkitSpeechGrammarList","webkitSpeechRecognition","webkitSpeechRecognitionError","webkitSpeechRecognitionEvent"];
+  const TABLE_ORDER = ["traits", "layout", "style", "media", "shapes", "timing", "webgl", "graphics", "viewport"];
+
+  const tables = {};
+  const lines = [];
+  let snapshot = null;
+  let record = null;
+
+  const el = (id) => document.getElementById(id);
+
+  const fmt = (bytes) => {
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return bytes + " bytes";
+  };
+
+  const shape = (value) => {
+    const bytes = JSON.stringify(value).length;
+    const count = Array.isArray(value) ? value.length + " entries" : Object.keys(value).length + " keys";
+    return count + ", " + fmt(bytes);
+  };
+
+  const render = () => {
+    const summary = el("summary");
+    if (!summary) return;
+    summary.innerHTML = lines.map(() => "<tr><th></th><td></td></tr>").join("");
+    const heads = summary.querySelectorAll("th");
+    const cells = summary.querySelectorAll("td");
+    lines.forEach((line, index) => {
+      heads[index].textContent = line[0];
+      cells[index].textContent = line[1];
+    });
+  };
+
+  const note = (name, detail) => {
+    lines.push([name, detail]);
+    render();
+  };
+
+  const say = (text, tone) => {
+    const status = el("status");
+    if (!status) return;
+    status.className = "on";
+    status.textContent = text;
+    status.style.borderColor = tone === "bad" ? "#c33" : "rgba(128,128,128,0.5)";
+    document.title = "wre graph: " + text;
+  };
+
+  const breathe = () => new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+
+  const measure = async (name, run) => {
+    await breathe();
+    say("measuring " + name);
+    try {
+      const value = await run();
+      if (value === null || value === undefined) throw new Error("nothing returned");
+      tables[name] = value;
+      note(name, shape(value));
+    } catch (error) {
+      note(name, "skipped: " + String(error && error.message || error));
+    }
+  };
+
+  const collectLayout = () => JSON.parse((() => {
+    const keys = LAYOUT_KEYS;
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px";
+    document.body.appendChild(frame);
+
+    const view = frame.contentWindow;
+    const inner = view.document;
+    const out = {};
+
+    for (const key of keys) {
+      const parts = key.split("|");
+      const tag = parts[0];
+      const css = parts[1] ?? "";
+      const attrs = parts.length >= 5 ? parts[2] : "";
+      const value = parts.length >= 5 ? parts[3] : "";
+      const html = parts.length >= 5 ? parts.slice(4).join("|") : parts.slice(2).join("|");
+
+      try {
+        const element = tag === "html" ? inner.documentElement : inner.createElement(tag);
+
+        if (element !== inner.documentElement) {
+          if (css) element.style.cssText = css;
+
+          for (const pair of attrs.split(" ")) {
+            if (!pair) continue;
+            const at = pair.indexOf("=");
+            if (at === -1) continue;
+            try {
+              element.setAttribute(pair.slice(0, at), pair.slice(at + 1));
+            } catch (error) {}
+          }
+
+          if (value) element.value = value;
+          if (html) element.innerHTML = html;
+          inner.body.appendChild(element);
+        }
+
+        const rect = element.getBoundingClientRect();
+
+        out[key] = {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          offsetWidth: element.offsetWidth,
+          offsetHeight: element.offsetHeight,
+          clientWidth: element.clientWidth,
+          clientHeight: element.clientHeight,
+          offsetLeft: element.offsetLeft,
+          offsetTop: element.offsetTop,
+          scrollWidth: element.scrollWidth,
+          scrollHeight: element.scrollHeight,
+        };
+
+        if (element !== inner.documentElement) element.remove();
+      } catch (error) {
+        out[key] = { error: String(error && error.message) };
+      }
+    }
+
+    frame.remove();
+    return JSON.stringify(out);
+  })());
+
+  const collectStyle = () => JSON.parse((() => {
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px";
+    document.body.appendChild(frame);
+
+    const inner = frame.contentDocument;
+    const view = frame.contentWindow;
+    const div = inner.createElement("div");
+    inner.body.appendChild(div);
+
+    const bodyStyle = view.getComputedStyle(inner.body);
+    const divStyle = view.getComputedStyle(div);
+
+    const own = Object.getOwnPropertyNames(bodyStyle);
+    const dashed = [];
+    for (let index = 0; index < bodyStyle.length; index += 1) dashed.push(bodyStyle[index]);
+
+    const collect = (style) => {
+      const out = {};
+      for (const name of dashed) out[name] = style.getPropertyValue(name);
+      return out;
+    };
+
+    const descriptors = {};
+    for (const name of own.slice(0, 4)) {
+      const descriptor = Object.getOwnPropertyDescriptor(bodyStyle, name);
+      descriptors[name] = { writable: descriptor.writable, enumerable: descriptor.enumerable, configurable: descriptor.configurable };
+    }
+
+    const answer = {
+      own,
+      dashed,
+      camel: own.filter((name) => !/^\d+$/.test(name)),
+      keys: Object.keys(bodyStyle),
+      prototype: {
+        names: Object.getOwnPropertyNames(Object.getPrototypeOf(bodyStyle)),
+        keys: Object.keys(Object.getPrototypeOf(bodyStyle)),
+        brand: Object.prototype.toString.call(bodyStyle),
+      },
+      descriptors,
+      body: collect(bodyStyle),
+      div: collect(divStyle),
+    };
+
+    inner.body.removeChild(div);
+    frame.remove();
+    return JSON.stringify(answer);
+  })());
+
+  const collectMedia = () => JSON.parse((() => {
+    const types = MEDIA_TYPES;
+    const video = document.createElement("video");
+    const audio = document.createElement("audio");
+    const out = { video: {}, audio: {} };
+
+    for (const type of types) {
+      try {
+        out.video[type] = video.canPlayType(type);
+      } catch (error) {
+        out.video[type] = "";
+      }
+
+      try {
+        out.audio[type] = audio.canPlayType(type);
+      } catch (error) {
+        out.audio[type] = "";
+      }
+    }
+
+    return JSON.stringify(out);
+  })());
+
+  const collectShapes = () => JSON.parse((() => {
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px";
+    document.body.appendChild(frame);
+
+    const view = frame.contentWindow;
+    const out = {};
+
+    for (const name of Object.getOwnPropertyNames(view)) {
+      let value;
+
+      try {
+        value = view[name];
+      } catch (error) {
+        continue;
+      }
+
+      if (typeof value !== "function" || !value.prototype) continue;
+
+      try {
+        out[name] = Object.getOwnPropertyNames(value.prototype);
+      } catch (error) {}
+    }
+
+    for (const name of SHAPES_NAMES) {
+      if (Object.prototype.hasOwnProperty.call(out, name)) continue;
+      let value;
+
+      try {
+        value = view[name];
+      } catch (error) {
+        continue;
+      }
+
+      if (typeof value !== "function" || !value.prototype) continue;
+
+      try {
+        out[name] = Object.getOwnPropertyNames(value.prototype);
+      } catch (error) {}
+    }
+
+    frame.remove();
+    return JSON.stringify(out);
+  })());
+
+  const collectTiming = () => {
+    const measured = JSON.parse((() => {
+      const frame = document.createElement("iframe");
+      frame.style.cssText = "width:0;height:0;border:0;position:absolute;left:-9999px";
+      document.body.appendChild(frame);
+
+      const view = frame.contentWindow;
+      const inner = frame.contentDocument;
+      const div = inner.createElement("div");
+      div.textContent = "text";
+      inner.body.appendChild(div);
+
+      const canvas = inner.createElement("canvas");
+      const context = canvas.getContext("2d");
+      const gl = inner.createElement("canvas").getContext("webgl2") || inner.createElement("canvas").getContext("webgl");
+      const audio = inner.createElement("audio");
+      const video = inner.createElement("video");
+      const style = view.getComputedStyle(div);
+
+      let sink = 0;
+
+      const cases = {
+        "get window.screen": () => { sink += view.screen ? 1 : 0; },
+        "get window.navigator": () => { sink += view.navigator ? 1 : 0; },
+        "get window.document": () => { sink += view.document ? 1 : 0; },
+        "get window.performance": () => { sink += view.performance ? 1 : 0; },
+        "get window.innerWidth": () => { sink += view.innerWidth; },
+        "get window.outerWidth": () => { sink += view.outerWidth; },
+        "get window.devicePixelRatio": () => { sink += view.devicePixelRatio; },
+        "get window.Screen.prototype.width": () => { sink += view.screen.width; },
+        "get window.Screen.prototype.colorDepth": () => { sink += view.screen.colorDepth; },
+        "get window.Navigator.prototype.userAgent": () => { sink += view.navigator.userAgent.length; },
+        "get window.Navigator.prototype.hardwareConcurrency": () => { sink += view.navigator.hardwareConcurrency; },
+        "get window.Navigator.prototype.languages": () => { sink += view.navigator.languages.length; },
+        "get window.Navigator.prototype.plugins": () => { sink += view.navigator.plugins.length; },
+        "get window.Element.prototype.clientWidth": () => { sink += div.clientWidth; },
+        "get window.HTMLElement.prototype.offsetWidth": () => { sink += div.offsetWidth; },
+        "now": () => { sink += view.performance.now(); },
+        "getComputedStyle": () => { sink += view.getComputedStyle(div) ? 1 : 0; },
+        "getPropertyValue": () => { sink += style.getPropertyValue("font-size").length; },
+        "getBoundingClientRect": () => { sink += div.getBoundingClientRect().width; },
+        "createElement": () => { sink += inner.createElement("div") ? 1 : 0; },
+        "appendChild": () => { const node = inner.createElement("span"); inner.body.appendChild(node); inner.body.removeChild(node); sink += 1; },
+        "querySelector": () => { sink += inner.querySelector("div") ? 1 : 0; },
+        "matchMedia": () => { sink += view.matchMedia("(min-width: 100px)").matches ? 1 : 0; },
+        "canPlayType": () => { sink += video.canPlayType("video/mp4").length; },
+        "canPlayTypeAudio": () => { sink += audio.canPlayType("audio/mpeg").length; },
+        "measureText": () => { sink += context.measureText("kasada").width; },
+        "fillText": () => { context.fillText("k", 1, 1); sink += 1; },
+        "getImageData": () => { sink += context.getImageData(0, 0, 8, 8).data.length; },
+        "toDataURL": () => { sink += canvas.toDataURL().length; },
+        "getParameter": () => { sink += gl ? String(gl.getParameter(gl.VERSION)).length : 0; },
+        "getExtension": () => { sink += gl && gl.getExtension("WEBGL_debug_renderer_info") ? 1 : 0; },
+        "getSupportedExtensions": () => { sink += gl ? gl.getSupportedExtensions().length : 0; },
+        "getOwnPropertyNames(window)": () => { sink += Object.getOwnPropertyNames(view).length; },
+        "toString(native)": () => { sink += Function.prototype.toString.call(view.fetch).length; },
+        "getOwnPropertyDescriptor": () => { sink += Object.getOwnPropertyDescriptor(view.Navigator.prototype, "userAgent") ? 1 : 0; },
+        "new Error": () => { sink += new Error("x").stack.length; },
+        "JSON.stringify": () => { sink += JSON.stringify({ a: 1, b: "two", c: [3] }).length; },
+        "createEvent": () => { sink += inner.createEvent("MouseEvent") ? 1 : 0; },
+        "attachShadow": () => { const node = inner.createElement("div"); node.attachShadow({ mode: "open" }); sink += 1; },
+      };
+
+      const run = (fn, iterations) => {
+        const start = performance.now();
+        for (let index = 0; index < iterations; index += 1) fn();
+        return (performance.now() - start) * 1e6 / iterations;
+      };
+
+      const out = {};
+
+      for (const [name, fn] of Object.entries(cases)) {
+        try {
+          fn();
+        } catch (error) {
+          out[name] = null;
+          continue;
+        }
+
+        const cheap = Math.max(run(fn, 200), 10);
+        const iterations = Math.min(Math.max(Math.ceil(2e7 / cheap), 20), 400000);
+
+        const samples = [];
+        for (let round = 0; round < 5; round += 1) samples.push(run(fn, iterations));
+        samples.sort((left, right) => left - right);
+        out[name] = Math.round(samples[Math.floor(samples.length / 2)]);
+      }
+
+      const mixed = () => {
+        let total = 0;
+        for (let index = 0; index < 2000; index += 1) {
+          total += div.clientWidth + view.navigator.userAgent.length + view.screen.width;
+          total += String(index).length + Object.getOwnPropertyNames(view.Navigator.prototype).length;
+        }
+        return total;
+      };
+
+      mixed();
+      const mixedStart = performance.now();
+      sink += mixed();
+      const mixedMs = performance.now() - mixedStart;
+
+      const deltas = [];
+      let previous = performance.now();
+
+      for (let index = 0; index < 200000; index += 1) {
+        const value = performance.now();
+        if (value !== previous) { deltas.push(value - previous); previous = value; }
+        if (deltas.length > 400) break;
+      }
+
+      deltas.sort((left, right) => left - right);
+
+      frame.remove();
+
+      return JSON.stringify({ sink, calls: out, mixedMs: mixedMs, resolutionMs: deltas.length ? deltas[0] : 0, resolutionSamples: deltas.slice(0, 5) });
+    })());
+
+    return { calls: measured.calls, resolutionMs: measured.resolutionMs, scale: 1 };
+  };
+
+  const installGraphics = () => {
+    if (window.__G) return;
+    (function () {
+      if (window.__G) return "already installed";
+
+      var state = { canvases: {}, contexts: {}, extensions: {}, nextExtension: 1 };
+
+      try {
+        if (window.speechSynthesis) window.speechSynthesis.getVoices();
+      } catch (error) {}
+
+      var decodeArgument = function (value) {
+        if (value === null || typeof value !== "object") return value;
+
+        if (value.__bytes) {
+          var bytes = new Uint8Array(value.__bytes.length);
+          for (var index = 0; index < value.__bytes.length; index += 1) bytes[index] = value.__bytes[index];
+          return value.kind === "Float32Array" ? new Float32Array(bytes.buffer) : bytes;
+        }
+
+        if (value.__numbers) {
+          var Constructor = window[value.kind] || Array;
+          return value.kind === "Array" ? value.__numbers.slice() : new Constructor(value.__numbers);
+        }
+
+        if (value.__imagedata) {
+          var image = new ImageData(new Uint8ClampedArray(value.__imagedata.data), value.__imagedata.width, value.__imagedata.height);
+          return image;
+        }
+
+        if (value.__extension) return state.extensions[value.__extension];
+
+        return value;
+      };
+
+      var encodeResult = function (value) {
+        if (value === null || value === undefined) return { kind: "primitive", value: value === undefined ? null : null };
+        var type = typeof value;
+
+        if (type === "number" || type === "string" || type === "boolean") return { kind: "primitive", value: value };
+
+        if (value instanceof ImageData) {
+          return { kind: "imagedata", width: value.width, height: value.height, data: Array.from(value.data) };
+        }
+
+        if (ArrayBuffer.isView(value)) {
+          return { kind: "typed", name: value.constructor.name, values: Array.from(value) };
+        }
+
+        if (Array.isArray(value)) return { kind: "array", values: value.map(function (entry) { return encodeResult(entry).value ?? entry; }) };
+
+        if (type === "object") {
+          var name = Object.prototype.toString.call(value);
+
+          if (/Extension|WEBGL|OES|EXT|ANGLE/i.test(name) || /extension/i.test(String(value))) {
+            var id = "ext" + state.nextExtension++;
+            state.extensions[id] = value;
+            var constants = {};
+
+            for (var key in value) {
+              try {
+                var member = value[key];
+                if (typeof member === "number" || typeof member === "string") constants[key] = member;
+              } catch (error) {}
+            }
+
+            return { kind: "extension", id: id, name: name, constants: constants };
+          }
+
+          var plain = {};
+
+          for (var field in value) {
+            try {
+              var entry = value[field];
+              if (entry === null || ["number", "string", "boolean"].indexOf(typeof entry) !== -1) plain[field] = entry;
+            } catch (error) {}
+          }
+
+          return { kind: "object", name: name, value: plain };
+        }
+
+        return { kind: "primitive", value: null };
+      };
+
+      window.__G = function (request) {
+        var call = JSON.parse(request);
+
+        try {
+          if (call.op === "canvas") {
+            var canvas = document.createElement("canvas");
+            canvas.width = call.width || 300;
+            canvas.height = call.height || 150;
+            state.canvases[call.id] = canvas;
+            return JSON.stringify({ ok: true, result: { kind: "primitive", value: call.id } });
+          }
+
+          if (call.op === "context") {
+            var host = state.canvases[call.id];
+            if (!host) return JSON.stringify({ ok: false, error: "no canvas " + call.id });
+
+            var context = host.getContext(call.kind, call.attributes ? decodeArgument(call.attributes) : undefined);
+            if (!context) return JSON.stringify({ ok: true, result: { kind: "primitive", value: null } });
+
+            var key = call.id + ":" + (call.store || call.kind);
+            state.contexts[key] = context;
+            return JSON.stringify({ ok: true, result: { kind: "primitive", value: key } });
+          }
+
+          if (call.op === "size") {
+            var target = state.canvases[call.id];
+            if (target) {
+              if (typeof call.width === "number") target.width = call.width;
+              if (typeof call.height === "number") target.height = call.height;
+            }
+            return JSON.stringify({ ok: true, result: { kind: "primitive", value: null } });
+          }
+
+          if (call.op === "canvasCall") {
+            var element = state.canvases[call.id];
+            if (!element) return JSON.stringify({ ok: false, error: "no canvas " + call.id });
+            var outcome = element[call.method].apply(element, (call.args || []).map(decodeArgument));
+            return JSON.stringify({ ok: true, result: encodeResult(outcome) });
+          }
+
+          if (call.op === "call") {
+            var handle = state.contexts[call.handle];
+            if (!handle) return JSON.stringify({ ok: false, error: "no context " + call.handle });
+
+            var method = handle[call.method];
+            if (typeof method !== "function") return JSON.stringify({ ok: false, error: "no method " + call.method });
+
+            var result = method.apply(handle, (call.args || []).map(decodeArgument));
+            return JSON.stringify({ ok: true, result: encodeResult(result) });
+          }
+
+          if (call.op === "profile") {
+            var canvasElement = document.createElement("canvas");
+            canvasElement.width = call.width || 300;
+            canvasElement.height = call.height || 150;
+
+            var gl = canvasElement.getContext(call.kind, call.attributes || undefined);
+            if (!gl) return JSON.stringify({ ok: true, result: { kind: "object", value: {} }, profile: null });
+
+            var prototype = Object.getPrototypeOf(gl);
+            var parameters = {};
+            var names = [];
+            var chain = prototype;
+
+            while (chain) {
+              names = names.concat(Object.getOwnPropertyNames(chain));
+              chain = Object.getPrototypeOf(chain);
+              if (chain === Object.prototype) break;
+            }
+
+            for (var index = 0; index < names.length; index += 1) {
+              var name = names[index];
+              if (!/^[A-Z0-9_]+$/.test(name)) continue;
+
+              var pname = gl[name];
+              if (typeof pname !== "number") continue;
+
+              try {
+                var value = gl.getParameter(pname);
+                if (value === null || value === undefined) continue;
+                parameters[pname] = encodeResult(value);
+              } catch (error) {}
+            }
+
+            var extensions = {};
+            var supported = [];
+
+            try {
+              supported = gl.getSupportedExtensions() || [];
+            } catch (error) {}
+
+            for (var e = 0; e < supported.length; e += 1) {
+              try {
+                var extension = gl.getExtension(supported[e]);
+                if (!extension) continue;
+
+                var constants = {};
+
+                for (var key in extension) {
+                  var member = extension[key];
+                  if (typeof member === "number" || typeof member === "string") {
+                    constants[key] = member;
+
+                    if (typeof member === "number") {
+                      try {
+                        var extValue = gl.getParameter(member);
+                        if (extValue !== null && extValue !== undefined) parameters[member] = encodeResult(extValue);
+                      } catch (error) {}
+                    }
+                  }
+                }
+
+                extensions[supported[e]] = constants;
+              } catch (error) {}
+            }
+
+            var precision = {};
+
+            try {
+              var shaders = [gl.VERTEX_SHADER, gl.FRAGMENT_SHADER];
+              var kinds = ["LOW_FLOAT", "MEDIUM_FLOAT", "HIGH_FLOAT", "LOW_INT", "MEDIUM_INT", "HIGH_INT"];
+
+              for (var sh = 0; sh < shaders.length; sh += 1) {
+                for (var k = 0; k < kinds.length; k += 1) {
+                  var format = gl.getShaderPrecisionFormat(shaders[sh], gl[kinds[k]]);
+                  if (format) precision[shaders[sh] + ":" + gl[kinds[k]]] = { rangeMin: format.rangeMin, rangeMax: format.rangeMax, precision: format.precision };
+                }
+              }
+            } catch (error) {}
+
+            var attributes = null;
+
+            try {
+              attributes = gl.getContextAttributes();
+            } catch (error) {}
+
+            return JSON.stringify({
+              ok: true,
+              result: { kind: "primitive", value: call.kind },
+              profile: { parameters: parameters, extensions: extensions, precision: precision, attributes: attributes, supported: supported },
+            });
+          }
+
+          if (call.op === "media") {
+            var media = window.matchMedia(call.query);
+            return JSON.stringify({ ok: true, result: { kind: "object", value: { matches: media.matches, media: media.media } } });
+          }
+
+          if (call.op === "voices") {
+            var voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+            var listed = [];
+
+            for (var voiceAt = 0; voiceAt < voices.length; voiceAt += 1) {
+              var voice = voices[voiceAt];
+              listed.push({ voiceURI: voice.voiceURI, name: voice.name, lang: voice.lang, localService: voice.localService, "default": voice.default });
+            }
+
+            return JSON.stringify({ ok: true, result: { kind: "primitive", value: JSON.stringify(listed) } });
+          }
+
+          if (call.op === "canPlay") {
+            var element = document.createElement(call.tag === "audio" ? "audio" : "video");
+            return JSON.stringify({ ok: true, result: { kind: "primitive", value: element.canPlayType(call.type) } });
+          }
+
+          if (call.op === "get") {
+            var source = state.contexts[call.handle];
+            if (!source) return JSON.stringify({ ok: false, error: "no context " + call.handle });
+            return JSON.stringify({ ok: true, result: encodeResult(source[call.name]) });
+          }
+
+          return JSON.stringify({ ok: false, error: "unknown op " + call.op });
+        } catch (error) {
+          return JSON.stringify({ ok: false, error: String(error && error.message).slice(0, 200) });
+        }
+      };
+
+      return "installed";
+    })();
+  };
+
+  const runGraphics = (request) => {
+    try {
+      return JSON.parse(window.__G(JSON.stringify(request)));
+    } catch (error) {
+      return { ok: false, error: String(error && error.message || error) };
+    }
+  };
+
+  const collectWebgl = () => {
+    installGraphics();
+    const profiles = {};
+
+    for (const kind of ["webgl", "webgl2"]) {
+      const answer = runGraphics({ op: "profile", kind });
+      if (answer.ok && answer.profile) profiles[kind] = answer.profile;
+    }
+
+    if (!Object.keys(profiles).length) throw new Error("no webgl context available");
+    return profiles;
+  };
+
+  const collectGraphics = async () => {
+    const response = await fetch("/calls.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("/calls.json returned " + response.status);
+
+    const payload = await response.json();
+    const calls = Array.isArray(payload) ? payload : (payload.graphics || payload.calls || []);
+    if (!calls.length) throw new Error("/calls.json listed no calls");
+
+    installGraphics();
+
+    const decodeArgument = (value) => {
+      if (value === null || typeof value !== "object") return value;
+      if (Array.isArray(value)) return value;
+      if (value.list) return { __numbers: value.list, kind: value.kind ?? "Array" };
+      if (value.imagedata) return { __imagedata: value.imagedata };
+      if (value.extension) return { __extension: value.extension };
+      return value;
+    };
+
+    const replies = [];
+    const created = new Set();
+
+    for (const call of calls) {
+      const canvasId = String(call.handle ?? "").split(":")[0];
+
+      if (canvasId && canvasId.startsWith("canvas") && !created.has(canvasId)) {
+        created.add(canvasId);
+        runGraphics({ op: "canvas", id: canvasId, width: 300, height: 150 });
+      }
+
+      let request;
+
+      if (call.method === "matchMedia") {
+        request = { op: "media", query: call.args[0] };
+      } else if (call.method === "getVoices") {
+        request = { op: "voices" };
+      } else if (call.method === "canPlayType") {
+        request = { op: "canPlay", tag: call.handle, type: call.args[0] };
+      } else if (call.method === "size") {
+        const [field, value] = call.args;
+        request = { op: "size", id: canvasId, [field]: value };
+      } else if (call.method === "getContext") {
+        const asked = String(call.args[0] ?? "").toLowerCase();
+        const normalised = asked === "2d" ? "2d" : asked === "webgl2" ? "webgl2" : "webgl";
+        request = { op: "context", id: canvasId, kind: call.args[0], store: normalised, attributes: decodeArgument(call.args[1]) };
+      } else if (call.method === "toDataURL" || call.method === "toBlob") {
+        request = { op: "canvasCall", id: canvasId, method: call.method, args: (call.args ?? []).map(decodeArgument) };
+      } else {
+        request = { op: "call", handle: call.handle, method: call.method, args: (call.args ?? []).map(decodeArgument) };
+      }
+
+      const answer = runGraphics(request);
+
+      if (!answer.ok) {
+        replies.push({ handle: call.handle, method: call.method, args: call.args ?? [], result: { kind: "primitive", value: null }, error: answer.error });
+        continue;
+      }
+
+      replies.push({ handle: call.handle, method: call.method, args: call.args ?? [], result: answer.result });
+    }
+
+    return replies;
+  };
+
+  const collectTraits = () => new Promise((resolve, reject) => {
+    settleTraits = resolve;
+    setTimeout(() => reject(new Error("the traits page did not finish in 30s")), 30000);
+    (function () {
+      var out = {};
+
+      var tap = function (target, sink) {
+        return new Proxy(target, {
+          get: function (holder, key, receiver) {
+            sink.push("g:" + String(key));
+            return Reflect.get(holder, key, receiver);
+          },
+          set: function (holder, key, value) {
+            sink.push("s:" + String(key));
+            return Reflect.set(holder, key, value);
+          },
+          has: function (holder, key) {
+            sink.push("h:" + String(key));
+            return Reflect.has(holder, key);
+          },
+          ownKeys: function (holder) {
+            sink.push("k");
+            return Reflect.ownKeys(holder);
+          },
+          getPrototypeOf: function (holder) {
+            sink.push("gp");
+            return Reflect.getPrototypeOf(holder);
+          },
+          setPrototypeOf: function (holder, proto) {
+            sink.push("sp");
+            return Reflect.setPrototypeOf(holder, proto);
+          },
+          getOwnPropertyDescriptor: function (holder, key) {
+            sink.push("gpd:" + String(key));
+            return Reflect.getOwnPropertyDescriptor(holder, key);
+          },
+          defineProperty: function (holder, key, descriptor) {
+            sink.push("dp:" + String(key));
+            return Reflect.defineProperty(holder, key, descriptor);
+          },
+          preventExtensions: function (holder) {
+            sink.push("pe");
+            return Reflect.preventExtensions(holder);
+          },
+          isExtensible: function (holder) {
+            sink.push("ie");
+            return Reflect.isExtensible(holder);
+          },
+          deleteProperty: function (holder, key) {
+            sink.push("d:" + String(key));
+            return Reflect.deleteProperty(holder, key);
+          },
+          apply: function (holder, self, argv) {
+            sink.push("a");
+            return Reflect.apply(holder, self, argv);
+          },
+          construct: function (holder, argv, newTarget) {
+            sink.push("c");
+            return Reflect.construct(holder, argv, newTarget);
+          },
+        });
+      };
+
+      var attempt = function (name, run) {
+        try {
+          out[name] = run();
+        } catch (error) {
+          out[name] = { threw: String(error && error.name) + ": " + String(error && error.message) };
+        }
+      };
+
+      attempt("eventInit", function () {
+        var names = [
+          "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent", "InputEvent", "FocusEvent",
+          "WheelEvent", "CompositionEvent", "CustomEvent", "ProgressEvent", "MessageEvent", "StorageEvent",
+          "DragEvent", "AnimationEvent", "TransitionEvent", "ErrorEvent", "PromiseRejectionEvent",
+          "SubmitEvent", "ToggleEvent", "PageTransitionEvent", "PopStateEvent", "HashChangeEvent",
+          "ClipboardEvent", "SecurityPolicyViolationEvent", "MediaQueryListEvent", "GamepadEvent",
+          "DeviceMotionEvent", "DeviceOrientationEvent", "TouchEvent", "BeforeUnloadEvent",
+        ];
+
+        var found = {};
+
+        for (var index = 0; index < names.length; index += 1) {
+          var name = names[index];
+          var constructor = window[name];
+          if (typeof constructor !== "function") continue;
+
+          var sink = [];
+
+          try {
+            new constructor("", tap(window.Object, sink));
+          } catch (error) {
+            sink.push("!" + String(error && error.name));
+          }
+
+          found[name] = sink;
+        }
+
+        return found;
+      });
+
+      attempt("blob", function () {
+        var sink = [];
+        var proxy = tap(window.Blob.constructor, sink);
+        var thrown = null;
+
+        try {
+          new window.Blob(proxy, proxy);
+        } catch (error) {
+          thrown = { name: String(error && error.name), message: String(error && error.message) };
+        }
+
+        var options = [];
+
+        try {
+          new window.Blob([], tap(window.Object, options));
+        } catch (error) {}
+
+        var noArguments = null;
+
+        try {
+          new window.Blob();
+          noArguments = "no throw";
+        } catch (error) {
+          noArguments = String(error && error.message);
+        }
+
+        return { sequence: sink, thrown: thrown, options: options, noArguments: noArguments };
+      });
+
+      attempt("ownKeys", function () {
+        var sink = [];
+        Object.getOwnPropertyNames(tap({}, sink));
+        return sink;
+      });
+
+      attempt("ownKeysDescriptors", function () {
+        var sink = [];
+        Object.getOwnPropertyDescriptors(tap({}, sink));
+        return sink;
+      });
+
+      attempt("webkitEntries", function () {
+        var input = document.createElement("input");
+        input.type = "file";
+
+        var descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "webkitEntries");
+
+        return {
+          type: typeof input.webkitEntries,
+          length: input.webkitEntries ? input.webkitEntries.length : null,
+          brand: input.webkitEntries ? Object.prototype.toString.call(input.webkitEntries) : null,
+          onPrototype: Boolean(descriptor),
+          accessor: descriptor ? Boolean(descriptor.get) : null,
+          enumerable: descriptor ? descriptor.enumerable : null,
+          configurable: descriptor ? descriptor.configurable : null,
+          filesBrand: Object.prototype.toString.call(input.files),
+          filesLength: input.files ? input.files.length : null,
+        };
+      });
+
+      attempt("classExtends", function () {
+        var paths = ["document.createElement", "Permissions.prototype.query", "Blob", "InputEvent"];
+        var found = {};
+
+        for (var index = 0; index < paths.length; index += 1) {
+          var value = window;
+          var parts = paths[index].split(".");
+
+          try {
+            for (var step = 0; step < parts.length; step += 1) value = value[parts[step]];
+            eval("(class Blah extends value {})");
+            found[paths[index]] = "no throw";
+          } catch (error) {
+            found[paths[index]] = String(error && error.message);
+          }
+        }
+
+        return found;
+      });
+
+      attempt("navigatorExtras", function () {
+        var names = ["wirelessDevices", "keyboard", "usb", "hid", "serial", "bluetooth", "ink", "windowControlsOverlay", "virtualKeyboard"];
+        var found = {};
+
+        for (var index = 0; index < names.length; index += 1) {
+          var name = names[index];
+          var value;
+
+          try {
+            value = navigator[name];
+          } catch (error) {
+            found[name] = "threw " + String(error && error.message);
+            continue;
+          }
+
+          found[name] = {
+            type: typeof value,
+            brand: value === null || value === undefined ? String(value) : Object.prototype.toString.call(value),
+            own: Object.prototype.hasOwnProperty.call(navigator, name),
+            inChain: name in navigator,
+          };
+        }
+
+        return found;
+      });
+
+      attempt("structuredClone", function () {
+        var cases = {
+          "navigator.plugins": function () { return navigator.plugins; },
+          "navigator.mimeTypes": function () { return navigator.mimeTypes; },
+          "document": function () { return document; },
+          "document.body": function () { return document.body; },
+          "window": function () { return window; },
+          "function": function () { return function noop() {}; },
+          "navigator": function () { return navigator; },
+          "location": function () { return location; },
+          "symbol": function () { return Symbol("x"); },
+          "plain": function () { return { a: 1 }; },
+          "error": function () { return new Error("x"); },
+          "promise": function () { return Promise.resolve(); },
+        };
+
+        var found = {};
+
+        for (var name in cases) {
+          var value;
+
+          try {
+            value = cases[name]();
+          } catch (error) {
+            found[name] = "unavailable";
+            continue;
+          }
+
+          var post = "no throw";
+          var clone = "no throw";
+
+          try {
+            window.postMessage(value, "*");
+          } catch (error) {
+            post = String(error && error.name) + ": " + String(error && error.message);
+          }
+
+          try {
+            window.structuredClone(value);
+          } catch (error) {
+            clone = String(error && error.name) + ": " + String(error && error.message);
+          }
+
+          found[name] = { postMessage: post, structuredClone: clone };
+        }
+
+        return found;
+      });
+
+      attempt("consoleReads", function () {
+        var methods = ["log", "debug", "info", "warn", "error", "trace", "dir"];
+        var found = {};
+
+        for (var index = 0; index < methods.length; index += 1) {
+          var counts = [0, 0, 0];
+          var error = new Error();
+
+          (function (holder) {
+            Object.defineProperty(error, "stack", { get: function () { holder[0] += 1; return ""; } });
+            Object.defineProperty(error, "name", { get: function () { holder[1] += 1; return ""; } });
+            Object.defineProperty(error, "message", { get: function () { holder[2] += 1; return ""; } });
+          })(counts);
+
+          try {
+            console[methods[index]](error);
+          } catch (failure) {}
+
+          found[methods[index]] = counts;
+        }
+
+        return found;
+      });
+
+      attempt("consolePrepareStackTrace", function () {
+        var saved = Error.prepareStackTrace;
+        var found = {};
+        var methods = ["log", "debug"];
+
+        for (var index = 0; index < methods.length; index += 1) {
+          var counter = { calls: 0 };
+          var Sub = class Sub extends Error {};
+          var error = new Sub();
+
+          error.name = "";
+          error.message = "";
+
+          Error.prepareStackTrace = (function (holder) {
+            return function () {
+              holder.calls += 1;
+            };
+          })(counter);
+
+          console[methods[index]](error);
+          found[methods[index]] = counter.calls;
+        }
+
+        Error.prepareStackTrace = saved;
+        return { calls: found, limit: Error.stackTraceLimit };
+      });
+
+      var send = function () {
+        settleTraits(out);
+      };
+
+      var queue = [];
+      out.durations = {};
+
+      var settle = function (name, make) {
+        queue.push(function () {
+          var started = performance.now();
+
+          return make().then(
+            function (value) {
+              out.durations[name] = Math.round((performance.now() - started) * 100) / 100;
+              out[name] = value;
+            },
+            function (error) {
+              out.durations[name] = Math.round((performance.now() - started) * 100) / 100;
+              out[name] = { threw: String(error && error.name) + ": " + String(error && error.message) };
+            },
+          );
+        });
+      };
+
+      var drain = function () {
+        var step = queue.shift();
+        if (!step) return Promise.resolve();
+        return step().then(drain);
+      };
+
+      if (navigator.keyboard && navigator.keyboard.getLayoutMap) {
+        settle("keyboardLayout", function () {
+          return navigator.keyboard.getLayoutMap().then(function (map) {
+            var pairs = [];
+            map.forEach(function (value, key) {
+              pairs.push([key, value]);
+            });
+            return pairs;
+          });
+        });
+      } else {
+        out.keyboardLayout = null;
+      }
+
+      settle("bodyStrut", function () {
+        return new Promise(function (resolve) {
+          var measure = function () {
+            var probe = document.createElement("iframe");
+
+            probe.style.width = "0px";
+            probe.style.height = "0px";
+            probe.style.border = "0";
+            probe.src = "javascript:;";
+
+            var empty = document.body.clientHeight;
+            document.body.appendChild(probe);
+
+            var withInline = document.body.clientHeight;
+            var htmlHeight = document.documentElement.offsetHeight;
+
+            var hidden = document.createElement("iframe");
+            hidden.style.display = "none";
+            document.body.replaceChild(hidden, probe);
+
+            var withHidden = document.body.clientHeight;
+            document.body.removeChild(hidden);
+
+            resolve({
+              empty: empty,
+              withInline: withInline,
+              withHidden: withHidden,
+              htmlHeight: htmlHeight,
+              lineHeight: getComputedStyle(document.body).lineHeight,
+              fontSize: getComputedStyle(document.body).fontSize,
+            });
+          };
+
+          if (document.body) measure();
+          else window.addEventListener("DOMContentLoaded", measure);
+        });
+      });
+
+      if (window.RTCPeerConnection) {
+        settle("webrtc", function () {
+          var connection = new RTCPeerConnection();
+          connection.createDataChannel("");
+
+          return connection
+            .createOffer({ offerToReceiveAudio: 1, offerToReceiveVideo: 1 })
+            .then(function (offer) {
+              return connection.setLocalDescription(offer).then(function () {
+                var description = connection.localDescription;
+                var result = {
+                  offerType: offer.type,
+                  offerSdp: offer.sdp,
+                  localType: description ? description.type : null,
+                  localSdp: description ? description.sdp : null,
+                  iceGatheringState: connection.iceGatheringState,
+                  signalingState: connection.signalingState,
+                  connectionState: connection.connectionState,
+                  configuration: connection.getConfiguration(),
+                };
+
+                connection.close();
+                return result;
+              });
+            });
+        });
+      } else {
+        out.webrtc = null;
+      }
+
+      if (navigator.getBattery) {
+        settle("battery", function () {
+          return navigator.getBattery().then(function (status) {
+            return {
+              charging: status.charging,
+              level: status.level,
+              chargingTime: status.chargingTime === Infinity ? "Infinity" : status.chargingTime,
+              dischargingTime: status.dischargingTime === Infinity ? "Infinity" : status.dischargingTime,
+            };
+          });
+        });
+      } else {
+        out.battery = null;
+      }
+
+      if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+        settle("highEntropy", function () {
+          return navigator.userAgentData.getHighEntropyValues([
+            "architecture", "bitness", "formFactor", "fullVersionList", "model", "platformVersion", "uaFullVersion", "wow64",
+          ]);
+        });
+      } else {
+        out.highEntropy = null;
+      }
+
+      var finish = function () {
+        drain().then(send, send);
+      };
+
+      var Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+
+      if (!Offline) {
+        out.audio = { threw: "no OfflineAudioContext" };
+        finish();
+        return;
+      }
+
+      var context = new Offline(1, 44100, 44100);
+      var oscillator = context.createOscillator();
+
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(10000, context.currentTime);
+
+      var compressor = context.createDynamicsCompressor();
+
+      compressor.threshold.value = -50;
+      compressor.knee.value = 40;
+      compressor.ratio.value = 12;
+      compressor.attack.value = 0;
+      compressor.release.value = 0.25;
+
+      var renderStarted = performance.now();
+
+      context.oncomplete = function (event) {
+        out.durations.audio = Math.round((performance.now() - renderStarted) * 100) / 100;
+
+        var channel = event.renderedBuffer.getChannelData(0);
+        var window500 = channel.slice(4500, 5000);
+        var sum = window500.reduce(function (total, value) {
+          return total + Math.abs(value);
+        }, 0);
+
+        var full = 0;
+
+        for (var index = 0; index < channel.length; index += 1) full += Math.abs(channel[index]);
+
+        var bytes = new Uint8Array(channel.buffer, channel.byteOffset, channel.byteLength);
+        var binary = "";
+
+        for (var at = 0; at < bytes.length; at += 8192) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(at, at + 8192));
+        }
+
+        out.audio = {
+          sampleRate: context.sampleRate,
+          length: channel.length,
+          sum: String(sum),
+          fullSum: String(full),
+          window: Array.prototype.slice.call(window500),
+          channel: btoa(binary),
+        };
+
+        finish();
+      };
+
+      oscillator.connect(compressor);
+      compressor.connect(context.destination);
+      oscillator.start(0);
+      context.startRendering();
+    })();
+  });
+
+  const collectViewport = () => {
+    const body = document.body;
+    const savedHtml = body.innerHTML;
+    const savedStyle = body.getAttribute("style");
+    const savedLabel = el("label") ? el("label").value : "";
+    const savedNotes = el("notes") ? el("notes").value : "";
+
+    const box = (node) => node ? {
+      childElementCount: node.childElementCount,
+      childNodes: node.childNodes.length,
+      clientHeight: node.clientHeight,
+      clientWidth: node.clientWidth,
+      scrollHeight: node.scrollHeight,
+      scrollWidth: node.scrollWidth,
+      offsetHeight: node.offsetHeight,
+      offsetWidth: node.offsetWidth,
+    } : null;
+
+    let out;
+
+    try {
+      body.innerHTML = "<script>window.KPSDK={};<\/script><script src=\"about:blank\"><\/script>";
+      body.removeAttribute("style");
+      void body.offsetHeight;
+
+      let host = window;
+      try {
+        host = window.top && window.top.innerWidth !== undefined ? window.top : window;
+      } catch (error) {
+        host = window;
+      }
+
+      out = {
+        view: {
+          innerWidth: host.innerWidth,
+          innerHeight: host.innerHeight,
+          outerWidth: host.outerWidth,
+          outerHeight: host.outerHeight,
+          screenX: host.screenX,
+          screenY: host.screenY,
+          pageXOffset: host.pageXOffset,
+          pageYOffset: host.pageYOffset,
+          devicePixelRatio: host.devicePixelRatio,
+          visualViewportWidth: host.visualViewport ? host.visualViewport.width : null,
+          visualViewportHeight: host.visualViewport ? host.visualViewport.height : null,
+          visualViewportScale: host.visualViewport ? host.visualViewport.scale : null,
+        },
+        documentElement: box(document.documentElement),
+        body: box(document.body),
+      };
+    } finally {
+      body.innerHTML = savedHtml;
+      if (savedStyle === null) body.removeAttribute("style");
+      else body.setAttribute("style", savedStyle);
+      if (el("label")) el("label").value = savedLabel;
+      if (el("notes")) el("notes").value = savedNotes;
+    }
+
+    return out;
+  };
+
+  const assemble = () => {
+    const body = {
+      label: "",
+      notes: "",
+      href: location.href,
+      user_agent: navigator.userAgent,
+      snapshot: snapshot,
+      tables: {},
+    };
+
+    for (const name of TABLE_ORDER) {
+      if (tables[name] !== undefined) body.tables[name] = tables[name];
+    }
+
+    return body;
+  };
+
+  const stamp = () => {
+    record.label = el("label").value.trim();
+    record.notes = el("notes").value.trim();
+  };
+
+  const sendRecord = async () => {
+    if (!record) return;
+    stamp();
+
+    const button = el("send");
+    button.disabled = true;
+    say("sending " + Object.keys(record.tables).length + " tables to wre");
+
+    try {
+      const response = await fetch("/graph", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(record),
+      });
+      const answer = await response.json().catch(() => ({}));
+      if (!response.ok || answer.error) throw new Error(answer.error || response.status);
+      say("stored as " + (answer.id || "graph") + (answer.path ? " at " + answer.path : "") +
+        (answer.warnings ? ", " + answer.warnings + " warnings, check the wre output" : ""));
+    } catch (error) {
+      button.disabled = false;
+      say("could not reach wre: " + error + ". Use Download JSON and `wre sandbox import`.", "bad");
+    }
+  };
+
+  const downloadRecord = () => {
+    if (!record) return;
+    stamp();
+
+    const blob = new Blob([JSON.stringify(record)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "capture-graph.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!target || !target.id) return;
+    if (target.id === "send") sendRecord();
+    if (target.id === "download") downloadRecord();
+  });
+
+  const run = async () => {
+    if (snapshotText === null) {
+      note("snapshot", "skipped: " + (snapshotFailure || "the walk returned nothing"));
+    } else {
+      try {
+        snapshot = JSON.parse(snapshotText);
+        note("snapshot", Object.keys(snapshot.objects || {}).length + " objects, " + fmt(snapshotText.length) +
+          (snapshot.truncated ? ", truncated" : ""));
+      } catch (error) {
+        note("snapshot", "skipped: " + String(error && error.message || error));
+      }
+      snapshotText = null;
+    }
+
+    await measure("traits", collectTraits);
+    await measure("layout", collectLayout);
+    await measure("style", collectStyle);
+    await measure("media", collectMedia);
+    await measure("shapes", collectShapes);
+    await measure("timing", collectTiming);
+    await measure("graphics", collectGraphics);
+    await measure("webgl", collectWebgl);
+    await measure("viewport", collectViewport);
+
+    record = assemble();
+
+    const missing = TABLE_ORDER.filter((name) => tables[name] === undefined);
+    const findings = el("findings");
+    findings.innerHTML = missing.map(() => "<li></li>").join("");
+    const items = findings.querySelectorAll("li");
+    missing.forEach((name, index) => { items[index].textContent = name + " was skipped, wre will fall back for it"; });
+
+    say(Object.keys(record.tables).length + " of " + TABLE_ORDER.length + " tables measured, " +
+      fmt(JSON.stringify(record).length) + " total");
+
+    const settings = new URLSearchParams(location.search);
+    const injected = window.__wreCapture || {};
+
+    if (settings.has("auto") || injected.auto) {
+      const label = settings.get("label") || injected.label || "";
+      const notes = settings.get("notes") || injected.notes || "";
+      if (label) el("label").value = label;
+      if (notes) el("notes").value = notes;
+      el("send").click();
+    }
+  };
+
+  run().catch((error) => {
+    say("capture failed: " + error, "bad");
+  });
+})();
+</script>
+</body>
+</html>

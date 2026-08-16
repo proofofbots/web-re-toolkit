@@ -1,24 +1,23 @@
 [package]
-name = "wre-sandbox"
+name = "wre-client-kasada"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A browser surface built from native bindings, so the shapes a protection inspects are real rather than faked in JavaScript"
+description = "Kasada Bot Defence: run the interrogation headlessly and carry the token the edge issues"
 
 [dependencies]
-wre-behavior.workspace = true
+wre-client.workspace = true
 wre-core.workspace = true
 wre-live.workspace = true
+wre-pow.workspace = true
+wre-sandbox.workspace = true
 
 base64.workspace = true
-chrono.workspace = true
 hex.workspace = true
-rand.workspace = true
+percent-encoding.workspace = true
 regex.workspace = true
-sha1.workspace = true
-sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

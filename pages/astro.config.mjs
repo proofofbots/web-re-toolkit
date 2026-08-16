@@ -50,6 +50,7 @@ export default defineConfig({
 						{ label: 'The browser surface', slug: 'guides/sandbox' },
 						{ label: 'Headless clients', slug: 'guides/clients' },
 						{ label: 'The Akamai client', slug: 'guides/akamai' },
+						{ label: 'The Kasada client', slug: 'guides/kasada' },
 					],
 				},
 				{

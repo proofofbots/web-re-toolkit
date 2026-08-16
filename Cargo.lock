@@ -3460,6 +3460,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "wre-client-kasada"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "tracing",
+ "url",
+ "wre-client",
+ "wre-core",
+ "wre-live",
+ "wre-pow",
+ "wre-sandbox",
+]
+
+[[package]]
 name = "wre-clientd"
 version = "0.1.0"
 dependencies = [
@@ -3473,6 +3492,7 @@ dependencies = [
  "wre-client-akamai",
  "wre-client-altcha",
  "wre-client-example",
+ "wre-client-kasada",
  "wre-core",
 ]
 
@@ -3687,10 +3707,15 @@ dependencies = [
 name = "wre-sandbox"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
+ "hex",
+ "rand",
  "regex",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2",
  "tracing",
  "url",
  "wre-behavior",

@@ -85,7 +85,7 @@ Run `wre <command> --help` for the flags of any command.
 | `wre sandbox list` | List the captured fingerprint profiles in the workspace. |
 | `wre sandbox profile` | Print the browser surface that would be installed. |
 | `wre sandbox check` | Mount the surface and check it looks like a real browser. |
-| `wre sandbox capture` | Serve the capture page and store the profile the browser sends back. |
+| `wre sandbox capture` | Serve the capture page and store the profile the browser sends back. `--graph` walks the whole object graph instead of reading a property table, and stores it under `profiles/graph`. `--calls <FILE>` serves a recorded canvas and WebGL call list for the page to answer. |
 | `wre sandbox import <FILE>` | Store a profile captured with the page's download button. |
 
 ## Attribution

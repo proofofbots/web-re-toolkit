@@ -11,7 +11,7 @@ description: What each of the toolkit's 24 crates contains, from crypto primitiv
 | `wre-pow` | Key derivations, hash chains, acceptance rules by prefix, leading zeros, folded modulus or score threshold, multi round challenges, parallel search. |
 | `wre-ident` | Name blind shape hashing, weighted evidence for locating a role, cross build function pairing, the lock file and the drift report. |
 | `wre-signals` | Value based slot alignment across builds, permutation and rotation recovery, noise filtering, provenance from an access trace. |
-| `wre-sandbox` | A browser surface installed as native V8 bindings, a document, event and timer layer on top of it, a library of profiles captured off real devices, and a miss log. |
+| `wre-sandbox` | A browser surface installed as native V8 bindings, a document, event and timer layer on top of it, a graph mode that replays a captured object graph and its child realms, a library of profiles captured off real devices, and a miss log. |
 | `wre-oracle` | Finding the response feature that reflects payload state, and grading a built payload against real ones. |
 | `wre-behavior` | Deterministic pointer, touch and key streams with timing that is not a constant. |
 | `wre-net` | SOCKS5 proxies with session rotation, an HTTP client that emulates a browser's TLS and HTTP/2 fingerprint, ClientHello parsing and building, JA3 and JA4, HPACK with Huffman, the Akamai HTTP/2 fingerprint. |
@@ -19,7 +19,7 @@ description: What each of the toolkit's 24 crates contains, from crypto primitiv
 | `wre-probe` | Generates the in-page instrumentation script from a declarative surface spec. |
 | `wre-capture` | Drives a run and writes a capture bundle. |
 | `wre-js` | oxc-based parsing, a 26-pass deobfuscation pipeline run to fixpoint including control flow unflattening, evidence-based renaming, the surface index, self-integrity verify and re-sign, an equivalence gate, a byte-splice backend. |
-| `wre-live` | An embedded V8 realm: mount a target, capture its functions as callable handles, host bridges, deterministic clock and random, execution timeouts. |
+| `wre-live` | An embedded V8 realm: mount a target, capture its functions as callable handles, host bridges, child contexts that pass objects between them, rebuilding a JavaScript method as a native one, deterministic clock and random, execution timeouts. |
 | `wre-env` | Captures a browser's object graph and materialises it lazily inside a realm. |
 | `wre-vm` | Dispatch-loop discovery, concolic handler probing, an instruction intermediate representation, control flow recovery, a lifter to readable JavaScript. |
 | `wre-wire` | Codecs, an addressable payload tree, diffing, forging, schema inference, round-trip verification. |

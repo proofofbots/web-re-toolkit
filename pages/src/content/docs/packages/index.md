@@ -13,6 +13,7 @@ Install a client package for one target, or a runtime package to drive several t
 | --- | --- | --- | --- |
 | `akamai` | [`@proofofbot/client-akamai`](https://www.npmjs.com/package/@proofofbot/client-akamai) | [`wre-client-akamai`](https://pypi.org/project/wre-client-akamai/) | `github.com/proofofbots/web-re-toolkit/packages/go/clients/akamai` |
 | `altcha` | [`@proofofbot/client-altcha`](https://www.npmjs.com/package/@proofofbot/client-altcha) | [`wre-client-altcha`](https://pypi.org/project/wre-client-altcha/) | `github.com/proofofbots/web-re-toolkit/packages/go/clients/altcha` |
+| `kasada` | [`@proofofbot/client-kasada`](https://www.npmjs.com/package/@proofofbot/client-kasada) | [`wre-client-kasada`](https://pypi.org/project/wre-client-kasada/) | `github.com/proofofbots/web-re-toolkit/packages/go/clients/kasada` |
 | `example` | [`@proofofbot/client-example`](https://www.npmjs.com/package/@proofofbot/client-example) | [`wre-client-example`](https://pypi.org/project/wre-client-example/) | `github.com/proofofbots/web-re-toolkit/packages/go/clients/example` |
 
 `example` is a worked adapter against a demo collector, not a real service. Use it to learn the API.
@@ -37,6 +38,7 @@ An op is one callable on a session. `wre client describe <target>` prints the cu
 | Target | Ops |
 | --- | --- |
 | `akamai` | `info`, `discover`, `solve`, `payload`, `post`, `request`, `page`, `cookies`, `pow`, `pixel`, `reset` |
+| `kasada` | `info`, `discover`, `solve`, `request`, `loader`, `pow`, `payload`, `vector`, `report`, `cookies`, `misses`, `reset` |
 | `altcha` | `info`, `challenge`, `solve`, `derive_key`, `verify`, `create_challenge`, `his`, `deobfuscate`, `server_signature`, `submit` |
 | `example` | `roles`, `build`, `hash`, `encode`, `seal`, `payload`, `solve`, `stall`, `submit` |
 

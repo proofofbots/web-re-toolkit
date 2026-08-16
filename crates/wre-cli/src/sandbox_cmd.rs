@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use wre_cdp::chrome::{Chrome, LaunchOptions};
 use wre_core::error::{Error, Result, io, json as json_error};
 use wre_live::realm::{Realm, RealmOptions};
-use wre_sandbox::capture::{Incoming, Server, Stored};
+use wre_sandbox::capture::{Incoming, Server, Stored, Taken};
+use wre_sandbox::graph::{GraphLibrary, GraphProfile};
 use wre_sandbox::library::{Library, Record, now};
 use wre_sandbox::{Finding, Profile, audit, install, warnings};
 
@@ -184,7 +185,8 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             let mut records = library.records().to_vec();
             records.push(Record::builtin());
 
-            let mut plain = String::from("| id | captured | warnings | device |\n| --- | --- | --- | --- |\n");
+            let mut plain =
+                String::from("| id | captured | warnings | device |\n| --- | --- | --- | --- |\n");
             let mut rendered = Vec::new();
 
             for record in &records {
@@ -194,7 +196,11 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
                 plain.push_str(&format!(
                     "| {} | {} | {warned} | {} |\n",
                     record.id,
-                    if record.captured_at.is_empty() { "built in" } else { &record.captured_at },
+                    if record.captured_at.is_empty() {
+                        "built in"
+                    } else {
+                        &record.captured_at
+                    },
                     record.summary()
                 ));
 
@@ -213,11 +219,58 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
                 plain.push_str("no captured profiles yet, run `wre sandbox capture`\n");
             }
 
-            context.emit(&json!({ "profiles": rendered, "dir": library.dir().display().to_string() }), &plain);
+            let graph_dir = context.workspace.profiles().join("graph");
+            let graphs = GraphLibrary::load(&graph_dir).unwrap_or_default();
+            let mut described = Vec::new();
+
+            if graphs.is_empty() {
+                plain.push_str("no captured graphs yet, run `wre sandbox capture --graph`\n");
+            } else {
+                plain.push_str(
+                    "\n| graph | captured | objects | tables |\n| --- | --- | --- | --- |\n",
+                );
+
+                for id in graphs.ids() {
+                    let Ok(profile) = graphs.resolve(Some(&id)) else {
+                        continue;
+                    };
+
+                    plain.push_str(&format!(
+                        "| {id} | {} | {} | {} |\n",
+                        profile.captured_at,
+                        profile.objects(),
+                        profile.tables.present().join(" ")
+                    ));
+
+                    described.push(json!({
+                        "id": id,
+                        "label": profile.label,
+                        "captured_at": profile.captured_at,
+                        "user_agent": profile.user_agent,
+                        "objects": profile.objects(),
+                        "tables": profile.tables.present(),
+                    }));
+                }
+
+                plain.push_str(&format!("\n{}\n", graph_dir.display()));
+            }
+
+            context.emit(
+                &json!({
+                    "profiles": rendered,
+                    "graphs": described,
+                    "dir": library.dir().display().to_string(),
+                }),
+                &plain,
+            );
             Ok(())
         }
 
-        SandboxCommand::Profile { profile, target, random } => {
+        SandboxCommand::Profile {
+            profile,
+            target,
+            random,
+        } => {
             let record = record_of(context, profile, target, random)?;
             let findings = audit(&record.profile);
 
@@ -225,7 +278,10 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             plain.push_str("| interface | property | value |\n| --- | --- | --- |\n");
             for interface in &record.profile.interfaces {
                 for (name, value) in &interface.properties {
-                    plain.push_str(&format!("| {} | {name} | {value} |\n", interface.constructor));
+                    plain.push_str(&format!(
+                        "| {} | {name} | {value} |\n",
+                        interface.constructor
+                    ));
                 }
             }
 
@@ -245,11 +301,19 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             let rendered = serde_json::to_value(&record)
                 .map_err(|error| Error::msg(format!("profile did not render: {error}")))?;
 
-            context.emit(&json!({ "record": rendered, "findings": findings_json(&findings) }), &plain);
+            context.emit(
+                &json!({ "record": rendered, "findings": findings_json(&findings) }),
+                &plain,
+            );
             Ok(())
         }
 
-        SandboxCommand::Check { profile, target, random, all } => {
+        SandboxCommand::Check {
+            profile,
+            target,
+            random,
+            all,
+        } => {
             let records = if all {
                 let library = library(context)?;
                 let mut records = library.records().to_vec();
@@ -267,17 +331,26 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
                 let (results, misfires, misses, installed) = check_profile(&record.profile)?;
                 failed += misfires;
 
-                plain.push_str(&format!("{}\n| check | verdict |\n| --- | --- |\n", record.id));
+                plain.push_str(&format!(
+                    "{}\n| check | verdict |\n| --- | --- |\n",
+                    record.id
+                ));
                 for result in &results {
                     let held = result["held"].as_bool().unwrap_or(false);
                     plain.push_str(&format!(
                         "| {} | {} |\n",
                         result["check"].as_str().unwrap_or_default(),
-                        if held { "holds".to_string() } else { format!("got {}", result["got"]) }
+                        if held {
+                            "holds".to_string()
+                        } else {
+                            format!("got {}", result["got"])
+                        }
                     ));
                 }
 
-                plain.push_str(&format!("\n{installed} surfaces installed, {misfires} checks failed\n"));
+                plain.push_str(&format!(
+                    "\n{installed} surfaces installed, {misfires} checks failed\n"
+                ));
                 if !misses.is_empty() {
                     plain.push_str(&format!("misses: {}\n", misses.join(", ")));
                 }
@@ -301,16 +374,44 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             Ok(())
         }
 
-        SandboxCommand::Capture { host, port, open, label, chrome_port, keep, force } => {
+        SandboxCommand::Capture {
+            host,
+            port,
+            open,
+            graph,
+            calls,
+            label,
+            chrome_port,
+            keep,
+            force,
+        } => {
             let mut library = library(context)?;
+            let graph_dir = context.workspace.profiles().join("graph");
             let mut server = Server::bind(&host, port)?;
+
+            if graph {
+                server = server.walking_the_graph();
+            }
+
+            if let Some(path) = calls {
+                let text = std::fs::read_to_string(&path).map_err(io(&path))?;
+                context.note(&format!("answering the call list in {}", path.display()));
+                server = server.answering_calls(text);
+            }
 
             if open {
                 server = server.sending_on_its_own(label.clone());
             }
 
             context.note(&format!("capture page on {}", server.url()));
-            context.note(&format!("profiles land in {}", library.dir().display()));
+            context.note(&format!(
+                "profiles land in {}",
+                if graph {
+                    graph_dir.display().to_string()
+                } else {
+                    library.dir().display().to_string()
+                }
+            ));
 
             if host != "127.0.0.1" && host != "localhost" {
                 context.note(
@@ -352,43 +453,89 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
                 let session = chrome.new_page(&url).await?;
                 session.try_send("Page.enable", json!({})).await;
                 session.try_send("Page.bringToFront", json!({})).await;
-                session.try_send("Page.navigate", json!({ "url": url })).await;
+                session
+                    .try_send("Page.navigate", json!({ "url": url }))
+                    .await;
 
-                context.note(&format!("driving {} on port {chrome_port}", chrome.version.browser));
+                context.note(&format!(
+                    "driving {} on port {chrome_port}",
+                    chrome.version.browser
+                ));
                 driven = Some((chrome, session));
             }
 
             let mut stored: Vec<Value> = Vec::new();
 
-            server.run(keep, |incoming: Incoming, peer: &str| {
-                let findings = audit(&incoming.profile);
-                let warned = warnings(&findings);
+            server.run(keep, |taken: Taken, peer: &str| match taken {
+                Taken::Graph(incoming) => {
+                    let profile = GraphProfile {
+                        id: derive_id(&incoming.label, &incoming.user_agent),
+                        label: incoming.label.clone(),
+                        captured_at: now(),
+                        href: incoming.href.clone(),
+                        user_agent: incoming.user_agent.clone(),
+                        snapshot: incoming.snapshot.clone(),
+                        tables: incoming.tables.clone(),
+                    };
 
-                let mut origin = incoming.origin.clone();
-                origin.client = peer.to_string();
+                    let id = profile.id.clone();
+                    let path = GraphLibrary::store(&graph_dir, &profile, force)?;
 
-                let record = Record {
-                    id: derive_id(&incoming.label, &origin.user_agent),
-                    label: incoming.label.clone(),
-                    notes: incoming.notes.clone(),
-                    captured_at: now(),
-                    origin,
-                    profile: incoming.profile,
-                };
+                    context.note(&format!(
+                        "stored {id} from {peer} at {}: {} objects, tables {}",
+                        path.display(),
+                        profile.objects(),
+                        profile.tables.present().join(", ")
+                    ));
 
-                let id = record.id.clone();
-                let path = library.store(record, force)?;
+                    stored.push(json!({
+                        "id": id,
+                        "path": path.display().to_string(),
+                        "objects": profile.objects(),
+                        "tables": profile.tables.present(),
+                    }));
 
-                context.note(&format!("stored {id} from {peer} at {}", path.display()));
-                print_findings(context, &findings);
+                    Ok(Stored {
+                        id,
+                        path: path.display().to_string(),
+                        warnings: 0,
+                    })
+                }
 
-                stored.push(json!({
-                    "id": id,
-                    "path": path.display().to_string(),
-                    "findings": findings_json(&findings),
-                }));
+                Taken::Profile(incoming) => {
+                    let findings = audit(&incoming.profile);
+                    let warned = warnings(&findings);
 
-                Ok(Stored { id, path: path.display().to_string(), warnings: warned })
+                    let mut origin = incoming.origin.clone();
+                    origin.client = peer.to_string();
+
+                    let record = Record {
+                        id: derive_id(&incoming.label, &origin.user_agent),
+                        label: incoming.label.clone(),
+                        notes: incoming.notes.clone(),
+                        captured_at: now(),
+                        origin,
+                        profile: incoming.profile.clone(),
+                    };
+
+                    let id = record.id.clone();
+                    let path = library.store(record, force)?;
+
+                    context.note(&format!("stored {id} from {peer} at {}", path.display()));
+                    print_findings(context, &findings);
+
+                    stored.push(json!({
+                        "id": id,
+                        "path": path.display().to_string(),
+                        "findings": findings_json(&findings),
+                    }));
+
+                    Ok(Stored {
+                        id,
+                        path: path.display().to_string(),
+                        warnings: warned,
+                    })
+                }
             })?;
 
             if let Some((_chrome, session)) = driven {

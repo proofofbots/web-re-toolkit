@@ -75,6 +75,39 @@ The page reads: the `Navigator`, `Screen` and `Window` properties the sandbox in
 
 Canvas images are stored under a digest of the drawing operations that produced them, so a target that replays a known probe gets that device's real pixels back and anything else falls through to `default` and records a miss.
 
+## Graph profiles
+
+A property profile answers questions you knew to ask. Some targets do not ask questions; they enumerate. They walk `Object.getOwnPropertyNames(window)` in order, read every own property of every object they reach, and hash the shape of the whole surface. A table of readings cannot answer that, because the names that are missing are the answer.
+
+For those, capture a **graph profile**: the object graph itself.
+
+```
+wre sandbox capture --graph --open --label "MacBook Pro, Chrome 151"
+```
+
+The page walks from `window`, `navigator`, `screen`, `location`, `history`, `performance`, `crypto` and `Intl` through every own property, recording each object's own names in order, each property's descriptor flags, whether it is an accessor and what it reads, each function's name, length and whether it is native, and every prototype link. Getters are invoked and their answers recorded; the ones that throw are recorded as throwing. The result lands in `profiles/graph/<id>.json` and is measured in tens of thousands of objects rather than dozens of properties.
+
+Alongside the graph the page records the tables that a captured graph cannot hold, because they are measurements rather than values: layout boxes, the computed style shape, `canPlayType` answers, the own property names of every interface read from a clean realm, per call timings, WebGL parameters, the traits a script probes for (the audio render, the keyboard layout, a WebRTC offer, the battery, the client hints, the read order of every event init dictionary), and the viewport.
+
+```rust
+let profile = GraphProfile::read("profiles/graph/macbook-chrome.json")?;
+let page = GraphPage { url: url.to_string(), frames: 4, ..GraphPage::default() };
+let mut graph = wre_sandbox::graph::open(&profile, &page, hooks, RealmOptions::default())?;
+
+graph.run(&script, "https://example.com/agent.js", false)?;
+graph.step()?;
+```
+
+Three things are worth knowing about a graph realm.
+
+**It replays, it does not invent.** A surface the capture did not reach is not there. `typeof document` is `undefined` on a graph that never walked into the document. The miss log says what was asked for and not answered.
+
+**Frames are real realms.** `GraphPage::frames` opens that many V8 contexts in the same isolate up front, each installed from the same graph, each with its own builtins. An iframe the script creates gets one as its `contentWindow`. They share one table of function sources with the document, so a script that reads the document's functions back through a frame's `Function.prototype.toString` gets `[native code]` rather than the environment's own JavaScript.
+
+**Scripts run under their own url.** `Graph::run(source, url, inline)` compiles with that url as the script origin, so a stack the script takes of itself names the url a browser would name. The environment's own frames are compiled anonymously and are filtered out of any stack the script reads, which matters because some payloads carry a stack verbatim.
+
+Where the engine's own view of a function is observable, and not just its source text, the environment rebuilds that function as a native one. `Realm::make_native(holder, key, name)` wraps a JavaScript method in a real V8 function that forwards to it, with the internal name set, so `Function.prototype.toString` reports native without a mask and V8's `class X extends <value> {}` message carries the right name. Setting the `name` property does not reach either of those.
+
 ## What a capture is checked against
 
 Every capture is audited on the way in, and `wre sandbox list` shows the warning count per profile. The audit warns about `navigator.webdriver`, a `HeadlessChrome` user agent, a SwiftShader or llvmpipe renderer, a desktop Chrome with no plugins, a platform that disagrees with the user agent, a mobile user agent with no touch points, and geometry that cannot happen (`innerHeight > outerHeight > screen.height`). Empty tables are noted rather than warned about, since the sandbox will record them as misses at replay time.

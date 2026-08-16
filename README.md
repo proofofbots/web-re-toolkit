@@ -1,9 +1,9 @@
 <h1 align="center">web-re-toolkit</h1>
 
-<h3 align="center">An Akamai Bot Manager client that runs without a browser, and the reversing toolkit it was built with</h3>
+<h3 align="center">Akamai Bot Manager and Kasada Bot Defence clients that run without a browser, and the reversing toolkit they were built with</h3>
 
 <p align="center">
-  <b>V2 and V3 sensors, the pixel challenge, and the session cookies, out of a small V8 sandbox instead of Chrome.</b>
+  <b>Akamai's V2 and V3 sensors and Kasada's interrogation, answered out of a small V8 sandbox instead of Chrome.</b>
 </p>
 
 <p align="center">
@@ -18,6 +18,7 @@
 | | |
 | --- | --- |
 | [**Akamai, solved headlessly**](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | V2 and V3 sensors, the pixel challenge, the proof of work, `_abck` and the cookie jar |
+| [**Kasada, solved headlessly**](https://proofofbots.github.io/web-re-toolkit/guides/kasada/) | the interrogation, the `/tl` submission, the token the edge issues, and the page it opens |
 | [**No browser**](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | a V8 realm with a native browser surface, not Chrome, not Puppeteer, not a DOM shim |
 | [**Nothing reimplemented**](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | the vendor's own sensor script computes the payload, so a rebuild does not break the client |
 | [**Real devices, not generated values**](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | profiles captured off actual browsers with `wre sandbox capture` |
@@ -129,7 +130,7 @@ wre pools
 | `wre-pow` | key derivations, hash chains, acceptance rules by prefix, leading zeros, folded modulus or score threshold, multi round challenges, parallel search |
 | `wre-ident` | name blind shape hashing, weighted evidence for locating a role, cross build function pairing, the lock file and the drift report |
 | `wre-signals` | value based slot alignment across builds, permutation and rotation recovery, noise filtering, provenance from an access trace |
-| `wre-sandbox` | a browser surface installed as native V8 bindings, a document, event and timer layer on top of it, a library of profiles captured off real devices, and a miss log |
+| `wre-sandbox` | a browser surface installed as native V8 bindings, a document, event and timer layer on top of it, a graph mode that replays a captured object graph and its child realms, a library of profiles captured off real devices, and a miss log |
 | `wre-oracle` | finding the response feature that reflects payload state, and grading a built payload against real ones |
 | `wre-behavior` | deterministic pointer, touch and key streams with timing that is not a constant |
 | `wre-net` | SOCKS5 proxies with session rotation, an HTTP client that emulates a browser's TLS and HTTP/2 fingerprint, ClientHello parsing and building, JA3 and JA4, HPACK with Huffman, the Akamai HTTP/2 fingerprint |
@@ -137,7 +138,7 @@ wre pools
 | `wre-probe` | generates the in-page instrumentation script from a declarative surface spec |
 | `wre-capture` | drives a run and writes a capture bundle |
 | `wre-js` | oxc-based parsing, a 26-pass deobfuscation pipeline run to fixpoint including control flow unflattening, evidence-based renaming, the surface index, self-integrity verify and re-sign, an equivalence gate, a byte-splice backend |
-| `wre-live` | an embedded V8 realm: mount a target, capture its functions as callable handles, host bridges, deterministic clock and random, execution timeouts |
+| `wre-live` | an embedded V8 realm: mount a target, capture its functions as callable handles, host bridges, child contexts that pass objects between them, rebuilding a JavaScript method as a native one, deterministic clock and random, execution timeouts |
 | `wre-env` | captures a browser's object graph and materialises it lazily inside a realm |
 | `wre-vm` | dispatch-loop discovery, concolic handler probing, an instruction IR, control flow recovery, a lifter to readable JavaScript |
 | `wre-wire` | codecs, an addressable payload tree, diffing, forging, schema inference, round-trip verification |
@@ -175,6 +176,7 @@ Everything below lives on the [documentation site](https://proofofbots.github.io
 | [Finding things again after a rebuild](https://proofofbots.github.io/web-re-toolkit/guides/identification/) | locating a target's roles without depending on the text of one build, and reading the next one |
 | [The browser surface](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | why it is native rather than JavaScript, and what it still does not have |
 | [The Akamai client](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | running a live Akamai sensor headlessly and carrying the session it produces |
+| [The Kasada client](https://proofofbots.github.io/web-re-toolkit/guides/kasada/) | answering a live Kasada interrogation headlessly and carrying the token it issues |
 | [Headless clients](https://proofofbots.github.io/web-re-toolkit/guides/clients/) | writing a headless client |
 | [The sidecar protocol](https://proofofbots.github.io/web-re-toolkit/reference/protocol/) | the sidecar wire contract |
 | [Command reference](https://proofofbots.github.io/web-re-toolkit/reference/cli/) | every `wre` subcommand |
@@ -184,6 +186,7 @@ Everything below lives on the [documentation site](https://proofofbots.github.io
 | target | adapter | client | research |
 | --- | --- | --- | --- |
 | akamai | any protected page | `clients/akamai` | [akamai](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) |
+| kasada | any protected page | `clients/kasada` | [kasada](https://proofofbots.github.io/web-re-toolkit/guides/kasada/) |
 | altcha | `targets/altcha.toml` | `clients/altcha` | [altcha](https://proofofbots.github.io/web-re-toolkit/research/altcha/) |
 | example | `targets/example.toml` | `clients/example` | a worked adapter, not a real service |
 
@@ -202,7 +205,7 @@ params = 1
 
 **Handler identity beats opcode numbers.** Protections permute the opcode table per build. Keying a trace on which handler function ran, rather than on the opcode number, makes the permutation irrelevant and recovers the mapping between two builds (`wre vm align`).
 
-**Snapshot the browser instead of writing DOM stubs.** `wre env snapshot` walks the real object graph into JSON. `wre env run` rebuilds it lazily inside a realm. Surfaces that cannot be faked in a headless realm route to a host bridge or a replay table.
+**Snapshot the browser instead of writing DOM stubs.** `wre env snapshot` walks the real object graph into JSON. `wre env run` rebuilds it lazily inside a realm. `wre sandbox capture --graph` does the same walk for a profile the sandbox mounts directly, for targets that enumerate the surface rather than reading known fields. Surfaces that cannot be faked in a headless realm route to a host bridge or a replay table.
 
 **Identity survives a rebuild.** Nothing important is found by matching the text of one build. A role is located by scoring several weak signals against a name blind normalisation of the AST: structural shape, magic constants, the property names it reaches, its position in the call graph, and where it matters, what it returns when you actually call it. The result is written to a lock file, and the next build is diffed against that lock, so a rebuild produces a report of what moved rather than a pattern that silently stops matching. [Finding things again after a rebuild](https://proofofbots.github.io/web-re-toolkit/guides/identification/) covers it.
 
@@ -236,7 +239,7 @@ The lifter emits structured control flow when the CFG is reducible and falls bac
 
 `wre-net` sends requests through `wreq`, so the ClientHello, HTTP/2 settings and header order match the browser profile the client emulates, and a client built from a user agent picks the nearest profile for that agent so the transport and the header agree. The profile set is whatever `wreq-util` ships, so a browser release is only reachable once it lands upstream, and a profile is one build's snapshot: it carries no per-installation variation, and nothing here hides a mismatch between the emulated client and the payload it sends.
 
-The sandbox has no DOM. A target that creates an element and measures it will not run. The capture page fills the layout, canvas and font tables that work would need, and nothing reads them yet.
+The property profile the sensor clients mount has no layout. A target that creates an element and measures it gets zero. A graph profile carries a measured layout table and answers those, within the set of elements the capture measured; anything outside it records a miss.
 
 Similarity between two builds is a structural estimate, not a proof. A function reported as edited at 90 percent shared structure still has to be read.
 

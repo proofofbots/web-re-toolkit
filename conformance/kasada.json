@@ -1,0 +1,61 @@
+{
+  "target": "kasada",
+  "config": {
+    "wait_ms": 5000,
+    "paced": false
+  },
+  "cases": [
+    {
+      "name": "info reports the target",
+      "op": "info",
+      "params": {},
+      "expect": { "target": "kasada", "open": false }
+    },
+    {
+      "name": "info names the graph profiles it can mount",
+      "op": "info",
+      "params": {},
+      "expect_keys": ["profile", "profiles", "user_agent", "fingerprint"]
+    },
+    {
+      "name": "the proof of work answers for a token and a salt",
+      "op": "pow",
+      "params": {
+        "token": "3;1786799692150;abcdefghijklmnopqrstuvwxyz0123456789",
+        "salt": "0f44a7cde3661c88ea0675ee045d307720919bc2a20d6b7d777aea1738f69a9a",
+        "st": 0
+      },
+      "expect_keys": ["header", "answers", "work_time", "id", "duration"]
+    },
+    {
+      "name": "the proof of work needs a salt",
+      "op": "pow",
+      "params": { "token": "abc" },
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "reading a payload before a solve is refused",
+      "op": "payload",
+      "params": {},
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "a stamped request needs the loader mounted first",
+      "op": "request",
+      "params": { "url": "https://kasada.example/", "stamped": true },
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "reset works on a session that was never opened",
+      "op": "reset",
+      "params": {},
+      "expect": { "ok": true }
+    },
+    {
+      "name": "there is no op called warm",
+      "op": "warm",
+      "params": {},
+      "expect_error": "unsupported"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 [bundle.default]
-targets = ["example", "altcha", "akamai"]
+targets = ["example", "altcha", "akamai", "kasada"]
 platforms = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",

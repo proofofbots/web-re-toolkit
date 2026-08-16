@@ -84,7 +84,14 @@ pub struct HostSpec<'a> {
 
 impl<'a> HostSpec<'a> {
     pub fn new(name: &'a str) -> Self {
-        Self { name, display: None, receiver_brand: None, state: false, arity: 0, shape: None }
+        Self {
+            name,
+            display: None,
+            receiver_brand: None,
+            state: false,
+            arity: 0,
+            shape: None,
+        }
     }
 
     pub fn taking(mut self, arity: i32) -> Self {
@@ -205,15 +212,21 @@ struct SourceMask {
     original: v8::Global<v8::Function>,
 }
 
+struct Delegate {
+    inner: v8::Global<v8::Function>,
+}
+
 pub struct Realm {
     isolate: v8::OwnedIsolate,
     context: v8::Global<v8::Context>,
+    frames: Vec<v8::Global<v8::Context>>,
     functions: Vec<v8::Global<v8::Function>>,
     hosts: Vec<Arc<HostEntry>>,
     options: RealmOptions,
     control: Option<v8::Global<v8::Object>>,
     controls: Vec<v8::Global<v8::Object>>,
     masks: Vec<Arc<SourceMask>>,
+    delegates: Vec<Arc<Delegate>>,
 }
 
 pub fn fresh_name() -> String {
@@ -228,7 +241,9 @@ pub fn fresh_name() -> String {
         .unwrap_or(0);
 
     let mut state = clock
-        ^ (COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        ^ (COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15))
         ^ 0xD1B5_4A32_D192_ED03;
 
     let letters = b"abcdefghijklmnopqrstuvwxyz";
@@ -264,12 +279,14 @@ impl Realm {
         let mut realm = Self {
             isolate,
             context,
+            frames: Vec::new(),
             functions: Vec::new(),
             hosts: Vec::new(),
             options,
             control: None,
             controls: Vec::new(),
             masks: Vec::new(),
+            delegates: Vec::new(),
         };
 
         realm.run_prelude()?;
@@ -306,6 +323,169 @@ impl Realm {
         &self.options
     }
 
+    fn context_for(&self, frame: Option<usize>) -> Result<v8::Global<v8::Context>> {
+        match frame {
+            None => Ok(self.context.clone()),
+            Some(index) => self
+                .frames
+                .get(index)
+                .cloned()
+                .ok_or_else(|| Error::msg(format!("frame {index} is not open"))),
+        }
+    }
+
+    pub fn open_frame(&mut self) -> Result<usize> {
+        let _entered = self.enter();
+        let main = self.context.clone();
+
+        let stored = {
+            v8::scope!(let scope, &mut self.isolate);
+            let context = v8::Context::new(scope, Default::default());
+
+            let token = {
+                let outer = v8::Local::new(scope, &main);
+                outer.get_security_token(scope)
+            };
+
+            context.set_security_token(token);
+            v8::Global::new(scope, context)
+        };
+
+        self.frames.push(stored);
+        Ok(self.frames.len() - 1)
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn eval_unit_in(&mut self, frame: usize, source: &str, name: &str) -> Result<()> {
+        self.eval_value_in(Some(frame), source, name).map(|_| ())
+    }
+
+    pub fn eval_json_in(&mut self, frame: usize, expression: &str) -> Result<Value> {
+        let wrapped = format!("(function () {{ return ({expression}); }})()");
+        self.eval_value_in(Some(frame), &wrapped, "wre:eval")
+    }
+
+    pub fn register_host_in(&mut self, frame: usize, name: &str, handler: HostFn) -> Result<()> {
+        self.register_in(Some(frame), HostSpec::new(name), handler)
+    }
+
+    pub fn attach_in(&mut self, frame: usize, source: &str, name: &str) -> Result<Control> {
+        let object = self.eval_object_in(Some(frame), source, name)?;
+        self.controls.push(object);
+
+        Ok(Control {
+            name: name.to_string(),
+            slot: self.controls.len() - 1,
+        })
+    }
+
+    pub fn share_into(&mut self, frame: usize, expression: &str, name: &str) -> Result<()> {
+        let _entered = self.enter();
+        let source = self.context.clone();
+        let target = self.context_for(Some(frame))?;
+
+        let stored = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &source);
+            v8::tc_scope!(let tc, scope);
+
+            let Some(code) = v8::String::new(tc, expression) else {
+                return Err(Error::msg(format!("expression {expression} is not usable")));
+            };
+
+            let Some(script) = v8::Script::compile(tc, code, None) else {
+                return Err(Error::msg(format!(
+                    "expression {expression} did not compile"
+                )));
+            };
+
+            let Some(value) = script.run(tc) else {
+                return Err(Error::msg(format!(
+                    "expression {expression} threw: {}",
+                    describe_exception(tc)
+                )));
+            };
+
+            v8::Global::new(tc, value)
+        };
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &target);
+
+        let holder = scope.get_current_context().global(scope);
+        let Some(key) = v8::String::new(scope, name) else {
+            return Err(Error::msg(format!("global name {name} is not usable")));
+        };
+
+        let local = v8::Local::new(scope, &stored);
+        holder.set(scope, key.into(), local);
+        Ok(())
+    }
+
+    pub fn share_value(&mut self, frame: usize, expression: &str, name: &str) -> Result<()> {
+        let _entered = self.enter();
+        let source = self.context_for(Some(frame))?;
+        let target = self.context.clone();
+
+        let stored = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &source);
+            v8::tc_scope!(let tc, scope);
+
+            let Some(code) = v8::String::new(tc, expression) else {
+                return Err(Error::msg(format!("expression {expression} is not usable")));
+            };
+
+            let Some(script) = v8::Script::compile(tc, code, None) else {
+                return Err(Error::msg(format!(
+                    "expression {expression} did not compile"
+                )));
+            };
+
+            let Some(value) = script.run(tc) else {
+                return Err(Error::msg(format!(
+                    "expression {expression} threw: {}",
+                    describe_exception(tc)
+                )));
+            };
+
+            v8::Global::new(tc, value)
+        };
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &target);
+
+        let holder = scope.get_current_context().global(scope);
+        let Some(key) = v8::String::new(scope, name) else {
+            return Err(Error::msg(format!("global name {name} is not usable")));
+        };
+
+        let local = v8::Local::new(scope, &stored);
+        holder.set(scope, key.into(), local);
+        Ok(())
+    }
+
+    pub fn share_global(&mut self, frame: usize, into: Option<usize>, name: &str) -> Result<()> {
+        let _entered = self.enter();
+        let source = self.context_for(Some(frame))?;
+        let target = self.context_for(into)?;
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &target);
+
+        let shared = {
+            let inner = v8::Local::new(scope, &source);
+            inner.global(scope)
+        };
+
+        let holder = scope.get_current_context().global(scope);
+
+        let Some(key) = v8::String::new(scope, name) else {
+            return Err(Error::msg(format!("global name {name} is not usable")));
+        };
+
+        holder.set(scope, key.into(), shared.into());
+        Ok(())
+    }
+
     fn guard(&mut self) -> Guard {
         Guard::start(self.isolate.thread_safe_handle(), self.options.timeout)
     }
@@ -330,9 +510,13 @@ impl Realm {
     }
 
     fn eval_value(&mut self, source: &str, name: &str) -> Result<Value> {
+        self.eval_value_in(None, source, name)
+    }
+
+    fn eval_value_in(&mut self, frame: Option<usize>, source: &str, name: &str) -> Result<Value> {
         let _entered = self.enter();
         let guard = self.guard();
-        let context = self.context.clone();
+        let context = self.context_for(frame)?;
 
         let outcome = {
             v8::scope_with_context!(let scope, &mut self.isolate, &context);
@@ -342,9 +526,8 @@ impl Realm {
                 return Err(Error::msg(format!("{name}: source too large for v8")));
             };
 
-            let origin_name = v8::String::new(tc, name).unwrap_or_else(|| {
-                v8::String::new(tc, "wre:anonymous").expect("short string")
-            });
+            let origin_name = v8::String::new(tc, name)
+                .unwrap_or_else(|| v8::String::new(tc, "wre:anonymous").expect("short string"));
 
             let origin = v8::ScriptOrigin::new(
                 tc,
@@ -376,10 +559,7 @@ impl Realm {
                             self.options.timeout
                         )));
                     }
-                    return Err(Error::msg(format!(
-                        "{name}: {}",
-                        describe_exception(tc)
-                    )));
+                    return Err(Error::msg(format!("{name}: {}", describe_exception(tc))));
                 }
             }
         };
@@ -389,9 +569,18 @@ impl Realm {
     }
 
     fn eval_object(&mut self, source: &str, name: &str) -> Result<v8::Global<v8::Object>> {
+        self.eval_object_in(None, source, name)
+    }
+
+    fn eval_object_in(
+        &mut self,
+        frame: Option<usize>,
+        source: &str,
+        name: &str,
+    ) -> Result<v8::Global<v8::Object>> {
         let _entered = self.enter();
         let guard = self.guard();
-        let context = self.context.clone();
+        let context = self.context_for(frame)?;
 
         let stored = {
             v8::scope_with_context!(let scope, &mut self.isolate, &context);
@@ -462,7 +651,9 @@ impl Realm {
             };
 
             let Ok(function) = v8::Local::<v8::Function>::try_from(value) else {
-                return Err(Error::msg(format!("the instrumentation's {method} is not a function")));
+                return Err(Error::msg(format!(
+                    "the instrumentation's {method} is not a function"
+                )));
             };
 
             let mut locals = Vec::with_capacity(args.len() + 1);
@@ -473,7 +664,9 @@ impl Realm {
                 };
 
                 let Some(script) = v8::Script::compile(tc, code, None) else {
-                    return Err(Error::msg(format!("expression {expression} did not compile")));
+                    return Err(Error::msg(format!(
+                        "expression {expression} did not compile"
+                    )));
                 };
 
                 let Some(target) = script.run(tc) else {
@@ -499,7 +692,10 @@ impl Realm {
                             self.options.timeout
                         )));
                     }
-                    return Err(Error::msg(format!("{method} threw: {}", describe_exception(tc))));
+                    return Err(Error::msg(format!(
+                        "{method} threw: {}",
+                        describe_exception(tc)
+                    )));
                 }
             }
         };
@@ -537,7 +733,9 @@ impl Realm {
             };
 
             let Ok(function) = v8::Local::<v8::Function>::try_from(value) else {
-                return Err(Error::msg(format!("{name}: {expression} is not a function")));
+                return Err(Error::msg(format!(
+                    "{name}: {expression} is not a function"
+                )));
             };
 
             v8::Global::new(tc, function)
@@ -612,7 +810,10 @@ impl Realm {
     }
 
     pub fn get_global(&mut self, name: &str) -> Result<Value> {
-        self.eval_json(&format!("globalThis[{}]", serde_json::to_string(name).unwrap_or_default()))
+        self.eval_json(&format!(
+            "globalThis[{}]",
+            serde_json::to_string(name).unwrap_or_default()
+        ))
     }
 
     pub fn has_global(&mut self, name: &str) -> bool {
@@ -649,7 +850,9 @@ impl Realm {
         };
 
         let Some(script) = v8::Script::compile(tc, source, None) else {
-            return Err(Error::msg(format!("expression {expression} did not compile")));
+            return Err(Error::msg(format!(
+                "expression {expression} did not compile"
+            )));
         };
 
         let Some(value) = script.run(tc) else {
@@ -657,7 +860,9 @@ impl Realm {
         };
 
         let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-            return Err(Error::msg(format!("expression {expression} is not an object")));
+            return Err(Error::msg(format!(
+                "expression {expression} is not an object"
+            )));
         };
 
         let Some(key) = v8::String::new(tc, BRAND_KEY) else {
@@ -673,9 +878,109 @@ impl Realm {
         Ok(())
     }
 
-    pub fn register(&mut self, spec: HostSpec<'_>, handler: HostFn) -> Result<()> {
+    pub fn make_native(&mut self, holder: &str, key: &str, name: Option<&str>) -> Result<()> {
         let _entered = self.enter();
         let context = self.context.clone();
+
+        let (entry, arity, display) = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &context);
+            v8::tc_scope!(let tc, scope);
+
+            let Some(source) = v8::String::new(tc, holder) else {
+                return Err(Error::msg(format!("holder {holder} is not usable")));
+            };
+
+            let Some(script) = v8::Script::compile(tc, source, None) else {
+                return Err(Error::msg(format!("holder {holder} did not compile")));
+            };
+
+            let Some(value) = script.run(tc) else {
+                return Err(Error::msg(format!("holder {holder} did not run")));
+            };
+
+            let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+                return Err(Error::msg(format!("holder {holder} is not an object")));
+            };
+
+            let Some(member) = v8::String::new(tc, key) else {
+                return Err(Error::msg(format!("member {key} is not usable")));
+            };
+
+            let Some(current) = object.get(tc, member.into()) else {
+                return Err(Error::msg(format!("{holder}.{key} is not there")));
+            };
+
+            let Ok(function) = v8::Local::<v8::Function>::try_from(current) else {
+                return Err(Error::msg(format!("{holder}.{key} is not a function")));
+            };
+
+            let arity = v8::String::new(tc, "length")
+                .and_then(|field| function.get(tc, field.into()))
+                .and_then(|value| value.to_integer(tc))
+                .map(|value| value.value() as i32)
+                .unwrap_or(0);
+
+            let display = name.map(str::to_string).unwrap_or_else(|| key.to_string());
+
+            (
+                Arc::new(Delegate {
+                    inner: v8::Global::new(tc, function),
+                }),
+                arity,
+                display,
+            )
+        };
+
+        self.delegates.push(Arc::clone(&entry));
+
+        {
+            v8::scope_with_context!(let scope, &mut self.isolate, &context);
+            v8::tc_scope!(let tc, scope);
+
+            let pointer = Arc::as_ptr(&entry) as *mut std::ffi::c_void;
+            let external = v8::External::new(tc, pointer);
+
+            let Some(replacement) = v8::Function::builder(delegate_trampoline)
+                .data(external.into())
+                .length(arity)
+                .constructor_behavior(v8::ConstructorBehavior::Throw)
+                .build(tc)
+            else {
+                return Err(Error::msg(format!("could not rebuild {holder}.{key}")));
+            };
+
+            if let Some(text) = v8::String::new(tc, &display) {
+                replacement.set_name(text);
+            }
+
+            let global = tc.get_current_context().global(tc);
+            let Some(slot) = v8::String::new(tc, "__wreNative") else {
+                return Err(Error::msg("the handover name is not usable"));
+            };
+
+            global.set(tc, slot.into(), replacement.into());
+        }
+
+        let install = format!(
+            "(function () {{ var holder = {holder}; var key = {};              var found = Object.getOwnPropertyDescriptor(holder, key);              Object.defineProperty(holder, key, {{ value: globalThis.__wreNative,              writable: found ? found.writable !== false : true,              enumerable: found ? Boolean(found.enumerable) : false,              configurable: true }}); delete globalThis.__wreNative; }})()",
+            serde_json::to_string(key).unwrap_or_default()
+        );
+
+        self.eval_unit(&install, "")
+    }
+
+    pub fn register(&mut self, spec: HostSpec<'_>, handler: HostFn) -> Result<()> {
+        self.register_in(None, spec, handler)
+    }
+
+    pub fn register_in(
+        &mut self,
+        frame: Option<usize>,
+        spec: HostSpec<'_>,
+        handler: HostFn,
+    ) -> Result<()> {
+        let _entered = self.enter();
+        let context = self.context_for(frame)?;
         v8::scope_with_context!(let scope, &mut self.isolate, &context);
         v8::tc_scope!(let tc, scope);
 
@@ -683,7 +988,10 @@ impl Realm {
             None => None,
             Some(shape) => {
                 let Some(source) = v8::String::new(tc, &shape.prototype) else {
-                    return Err(Error::msg(format!("prototype {} is not usable", shape.prototype)));
+                    return Err(Error::msg(format!(
+                        "prototype {} is not usable",
+                        shape.prototype
+                    )));
                 };
 
                 let Some(script) = v8::Script::compile(tc, source, None) else {
@@ -694,7 +1002,10 @@ impl Realm {
                 };
 
                 let Some(value) = script.run(tc) else {
-                    return Err(Error::msg(format!("prototype {} did not run", shape.prototype)));
+                    return Err(Error::msg(format!(
+                        "prototype {} did not run",
+                        shape.prototype
+                    )));
                 };
 
                 let Ok(prototype) = v8::Local::<v8::Object>::try_from(value) else {
@@ -736,7 +1047,10 @@ impl Realm {
             .length(spec.arity)
             .build(tc)
         else {
-            return Err(Error::msg(format!("could not build host function {}", spec.name)));
+            return Err(Error::msg(format!(
+                "could not build host function {}",
+                spec.name
+            )));
         };
 
         if let Some(display) = spec.display
@@ -753,12 +1067,18 @@ impl Realm {
         let object = self.eval_object(source, name)?;
         self.controls.push(object);
 
-        Ok(Control { name: name.to_string(), slot: self.controls.len() - 1 })
+        Ok(Control {
+            name: name.to_string(),
+            slot: self.controls.len() - 1,
+        })
     }
 
     pub fn invoke(&mut self, control: &Control, method: &str, args: &[Value]) -> Result<Value> {
         let Some(object) = self.controls.get(control.slot).cloned() else {
-            return Err(Error::msg(format!("{} is not attached to this realm", control.name)));
+            return Err(Error::msg(format!(
+                "{} is not attached to this realm",
+                control.name
+            )));
         };
 
         self.invoke_on(object, method, None, args)
@@ -1023,6 +1343,28 @@ fn host_trampoline(
     }
 }
 
+fn delegate_trampoline(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut out: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(external) = v8::Local::<v8::External>::try_from(args.data()) else {
+        return;
+    };
+
+    let entry = unsafe { &*(external.value() as *const Delegate) };
+    let inner = v8::Local::new(scope, &entry.inner);
+
+    let mut values = Vec::with_capacity(args.length() as usize);
+    for index in 0..args.length() {
+        values.push(args.get(index));
+    }
+
+    if let Some(value) = inner.call(scope, args.this().into(), &values) {
+        out.set(value);
+    }
+}
+
 fn source_mask_trampoline(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -1068,7 +1410,9 @@ fn resolve<'s>(
     };
 
     let Some(script) = v8::Script::compile(scope, source, None) else {
-        return Err(Error::msg(format!("expression {expression} did not compile")));
+        return Err(Error::msg(format!(
+            "expression {expression} did not compile"
+        )));
     };
 
     script
@@ -1090,7 +1434,10 @@ fn mark_native(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> bool {
     true
 }
 
-fn private_key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> Option<v8::Local<'s, v8::Private>> {
+fn private_key<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::Private>> {
     let key = v8::String::new(scope, name)?;
     Some(v8::Private::for_api(scope, Some(key)))
 }
@@ -1244,7 +1591,11 @@ fn describe_exception(scope: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope
         .unwrap_or_default()
         .to_string();
 
-    if first.is_empty() { message } else { format!("{message} ({first})") }
+    if first.is_empty() {
+        message
+    } else {
+        format!("{message} ({first})")
+    }
 }
 
 struct Entered(*const v8::Isolate);
@@ -1308,9 +1659,21 @@ fn parse_records(raw: &Value) -> Records {
     if let Some(list) = raw.get("access").and_then(Value::as_array) {
         for entry in list {
             records.access.push(AccessRecord {
-                on: entry.get("on").and_then(Value::as_str).unwrap_or_default().to_string(),
-                kind: entry.get("kind").and_then(Value::as_str).unwrap_or_default().to_string(),
-                key: entry.get("key").and_then(Value::as_str).unwrap_or_default().to_string(),
+                on: entry
+                    .get("on")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                kind: entry
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                key: entry
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             });
         }
     }
@@ -1318,8 +1681,15 @@ fn parse_records(raw: &Value) -> Records {
     if let Some(list) = raw.get("errors").and_then(Value::as_array) {
         for entry in list {
             records.errors.push(ErrorRecord {
-                where_: entry.get("where").and_then(Value::as_str).map(str::to_string),
-                text: entry.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+                where_: entry
+                    .get("where")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                text: entry
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             });
         }
     }
@@ -1338,8 +1708,14 @@ fn parse_records(raw: &Value) -> Records {
                             .collect()
                     })
                     .unwrap_or_default(),
-                result: entry.get("result").and_then(Value::as_str).map(str::to_string),
-                threw: entry.get("threw").and_then(Value::as_str).map(str::to_string),
+                result: entry
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                threw: entry
+                    .get("threw")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             });
         }
     }
