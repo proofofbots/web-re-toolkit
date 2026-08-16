@@ -1,9 +1,9 @@
 <h1 align="center">web-re-toolkit</h1>
 
-<h3 align="center">Akamai Bot Manager and Kasada Bot Defence clients that run without a browser, and the reversing toolkit they were built with</h3>
+<h3 align="center">Akamai Bot Manager and Kasada Bot Defence solvers that run without a browser, and the reversing toolkit they were built with</h3>
 
 <p align="center">
-  <b>Akamai's V2 and V3 sensors and Kasada's interrogation, answered out of a small V8 sandbox instead of Chrome.</b>
+  <b>Akamai's V2 and V3 sensors and Kasada's interrogation, answered out of a small V8 sandbox instead of a browser.</b>
 </p>
 
 <p align="center">
