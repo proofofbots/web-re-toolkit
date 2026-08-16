@@ -97,12 +97,20 @@ const MEDIA_TYPES = [
   'application/x-mpegURL',
   'audio/mpeg',
   'audio/aac',
+  'audio/mp4; codecs="mp4a.40.2"',
+  'audio/webm; codecs="vorbis"',
+  'video/webm; codecs="vp8, vorbis"',
+  'video/mp4; codecs="hvc1.1.6.L93.90"',
   'audio/wav; codecs="1"',
   'audio/webm; codecs="opus"',
   'audio/ogg; codecs="vorbis"'
 ];
 
 const MEDIA_QUERIES = [
+  "(pointer: coarse)",
+  "(orientation: landscape)",
+  "(max-width: 767px)",
+  "(min-width: 768px)",
   "(prefers-color-scheme: dark)",
   "(prefers-reduced-motion: reduce)",
   "(prefers-reduced-transparency: reduce)",
@@ -111,7 +119,6 @@ const MEDIA_QUERIES = [
   "(hover: hover)",
   "(any-hover: hover)",
   "(pointer: fine)",
-  "(pointer: coarse)",
   "(any-pointer: coarse)",
   "(color-gamut: p3)",
   "(dynamic-range: high)",
@@ -124,7 +131,10 @@ const MEDIA_QUERIES = [
 const PERMISSIONS = [
   "notifications", "geolocation", "camera", "microphone", "midi",
   "push", "persistent-storage", "clipboard-read", "clipboard-write",
-  "background-sync", "accelerometer", "gyroscope"
+  "background-sync", "accelerometer", "gyroscope", "magnetometer",
+  "screen-wake-lock", "payment-handler", "idle-detection", "window-management",
+  "speaker", "device-info", "bluetooth", "ambient-light-sensor", "clipboard",
+  "accessibility-events", "storage-access", "local-fonts"
 ];
 
 const FONTS = [
@@ -133,6 +143,25 @@ const FONTS = [
   "MS Gothic", "Noto Sans", "Roboto", "Segoe UI", "Tahoma",
   "Times New Roman", "Trebuchet MS", "Verdana"
 ];
+
+const DOCUMENT_KEYS = [
+  "characterSet", "charset", "inputEncoding", "contentType", "compatMode",
+  "designMode", "dir", "visibilityState", "hidden"
+];
+
+const HIGH_ENTROPY = [
+  "architecture", "bitness", "model", "platformVersion", "uaFullVersion",
+  "fullVersionList", "wow64"
+];
+
+const CANVAS_STATE = ["fillStyle", "strokeStyle", "font", "textBaseline", "textAlign",
+  "globalAlpha", "globalCompositeOperation", "lineWidth", "lineCap", "lineJoin", "shadowBlur",
+  "shadowColor", "filter", "direction", "imageSmoothingEnabled"];
+
+const CANVAS_VOIDS = ["clearRect", "fillRect", "strokeRect", "beginPath", "closePath", "moveTo",
+  "lineTo", "bezierCurveTo", "quadraticCurveTo", "arc", "arcTo", "ellipse", "rect", "fill",
+  "stroke", "clip", "save", "restore", "scale", "rotate", "translate", "transform",
+  "setTransform", "resetTransform", "drawImage", "putImageData", "setLineDash", "strokeText"];
 
 function plain(value) {
   if (value === undefined) return undefined;
@@ -161,20 +190,238 @@ function readPlugins() {
   const plugins = navigator.plugins || [];
   for (let index = 0; index < plugins.length; index += 1) {
     const plugin = plugins[index];
+    const types = [];
+    for (let at = 0; at < plugin.length; at += 1) types.push(String(plugin[at].type));
     list.push({
       name: String(plugin.name || ""),
       filename: String(plugin.filename || ""),
-      description: String(plugin.description || "")
+      description: String(plugin.description || ""),
+      mime_types: types
     });
   }
   return list;
 }
 
-function readWebgl() {
+function readMimeTypes() {
+  const list = [];
+  const types = navigator.mimeTypes || [];
+  for (let index = 0; index < types.length; index += 1) {
+    const entry = types[index];
+    list.push({
+      type: String(entry.type || ""),
+      suffixes: String(entry.suffixes || ""),
+      description: String(entry.description || ""),
+      plugin: entry.enabledPlugin ? String(entry.enabledPlugin.name) : ""
+    });
+  }
+  return list;
+}
+
+async function readUserAgentData() {
+  if (!navigator.userAgentData) return null;
+
+  const brands = (navigator.userAgentData.brands || []).map((entry) => ({
+    brand: String(entry.brand),
+    version: String(entry.version)
+  }));
+
+  let high = {};
+  try {
+    const answers = await navigator.userAgentData.getHighEntropyValues(HIGH_ENTROPY);
+    for (const key of HIGH_ENTROPY) if (answers[key] !== undefined) high[key] = answers[key];
+  } catch (error) {
+    high = {};
+  }
+
+  return {
+    brands,
+    mobile: Boolean(navigator.userAgentData.mobile),
+    platform: String(navigator.userAgentData.platform || ""),
+    high_entropy: high
+  };
+}
+
+function readConnection() {
+  const connection = navigator.connection;
+  if (!connection) return null;
+
+  return {
+    downlink: Number(connection.downlink) || 0,
+    effective_type: String(connection.effectiveType || ""),
+    rtt: Number(connection.rtt) || 0,
+    save_data: Boolean(connection.saveData)
+  };
+}
+
+function readIntl() {
+  const options = Intl.DateTimeFormat().resolvedOptions();
+
+  return {
+    locale: String(options.locale || ""),
+    calendar: String(options.calendar || ""),
+    numbering_system: String(options.numberingSystem || ""),
+    time_zone: String(options.timeZone || ""),
+    hour_cycle: String(options.hourCycle || ""),
+    timezone_offset: new Date().getTimezoneOffset()
+  };
+}
+
+async function readAudio() {
+  let context;
+
+  try {
+    context = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (error) {
+    return null;
+  }
+
+  const audio = {
+    sample_rate: Number(context.sampleRate) || 0,
+    state: String(context.state || ""),
+    base_latency: Number(context.baseLatency) || 0,
+    output_latency: Number(context.outputLatency) || 0,
+    max_channel_count: Number(context.destination.maxChannelCount) || 0,
+    channel_count: Number(context.destination.channelCount) || 0,
+    rendered: ""
+  };
+
+  try {
+    await context.close();
+  } catch (error) {
+    void error;
+  }
+
+  try {
+    const offline = new OfflineAudioContext(1, 44100, 44100);
+    const oscillator = offline.createOscillator();
+    oscillator.type = "triangle";
+    oscillator.frequency.value = 10000;
+
+    const compressor = offline.createDynamicsCompressor();
+    compressor.threshold.value = -50;
+    compressor.knee.value = 40;
+    compressor.ratio.value = 12;
+    compressor.attack.value = 0;
+    compressor.release.value = 0.25;
+
+    oscillator.connect(compressor);
+    compressor.connect(offline.destination);
+    oscillator.start(0);
+
+    const buffer = await offline.startRendering();
+    const data = buffer.getChannelData(0);
+    let sum = 0;
+    for (let index = 4500; index < 5000; index += 1) sum += Math.abs(data[index]);
+    audio.rendered = await digest(String(sum));
+  } catch (error) {
+    audio.rendered = "";
+  }
+
+  return audio;
+}
+
+async function readBattery() {
+  if (!navigator.getBattery) return null;
+
+  try {
+    const battery = await navigator.getBattery();
+    return {
+      charging: Boolean(battery.charging),
+      level: Number(battery.level),
+      charging_time: Number.isFinite(battery.chargingTime) ? battery.chargingTime : null,
+      discharging_time: Number.isFinite(battery.dischargingTime) ? battery.dischargingTime : null
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function readVoices() {
+  const list = speechSynthesis && speechSynthesis.getVoices ? speechSynthesis.getVoices() : [];
+
+  return Array.from(list).map((voice) => ({
+    name: String(voice.name),
+    lang: String(voice.lang),
+    default: Boolean(voice.default),
+    local_service: Boolean(voice.localService),
+    voice_uri: String(voice.voiceURI || voice.name)
+  }));
+}
+
+async function readDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.map((device) => ({
+      kind: String(device.kind),
+      label: String(device.label || ""),
+      device_id: String(device.deviceId || ""),
+      group_id: String(device.groupId || "")
+    }));
+  } catch (error) {
+    return [];
+  }
+}
+
+function readMemory() {
+  if (!performance.memory) return null;
+
+  return {
+    js_heap_size_limit: Number(performance.memory.jsHeapSizeLimit) || 0,
+    total_js_heap_size: Number(performance.memory.totalJSHeapSize) || 0,
+    used_js_heap_size: Number(performance.memory.usedJSHeapSize) || 0
+  };
+}
+
+function readOrientation() {
+  if (!screen.orientation) return null;
+  return { angle: Number(screen.orientation.angle) || 0, type: String(screen.orientation.type) };
+}
+
+function readChrome() {
+  if (!window.chrome) return null;
+
+  const shape = { runtime: {}, app: {} };
+
+  try {
+    if (window.chrome.app) {
+      shape.app = { isInstalled: Boolean(window.chrome.app.isInstalled) };
+    }
+    if (window.chrome.runtime) {
+      shape.runtime = {};
+    }
+  } catch (error) {
+    void error;
+  }
+
+  return shape;
+}
+
+function readDocument() {
+  const out = {};
+  for (const key of DOCUMENT_KEYS) {
+    const entry = safeRead(() => document[key]);
+    if (entry !== undefined) out[key] = entry;
+  }
+  return out;
+}
+
+function safeRead(read) {
+  try {
+    return plain(read());
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function readWebgl(kind) {
   const parameters = {};
   const extensions = [];
   const canvas = document.createElement("canvas");
-  const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  const gl = kind === "webgl2"
+    ? canvas.getContext("webgl2")
+    : canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
   if (!gl) return { parameters, extensions };
 
   const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
@@ -232,7 +479,7 @@ async function readPermissions() {
       const status = await navigator.permissions.query({ name });
       states[name] = status.state;
     } catch (error) {
-      continue;
+      if (String(error.message || "").indexOf("not a valid enum value") >= 0) states[name] = "invalid";
     }
   }
   return states;
@@ -296,43 +543,133 @@ async function digest(text) {
   return "sha256:" + hex;
 }
 
-async function readCanvas() {
+function recorder(canvas) {
+  const real = canvas.getContext("2d");
+  const ops = [];
+
+  const proxy = {
+    __ops: ops,
+    canvas,
+    measureText: (text) => real.measureText(text),
+    getImageData: (x, y, width, height) => real.getImageData(x, y, width, height),
+    createLinearGradient: (...args) => real.createLinearGradient(...args),
+    toDataURL: () => canvas.toDataURL()
+  };
+
+  for (const name of CANVAS_VOIDS) {
+    proxy[name] = (...args) => {
+      ops.push(name + "(" + args.join(",") + ")");
+      real[name](...args);
+    };
+  }
+
+  proxy.fillText = (text, x, y) => {
+    ops.push("fillText(" + text + "," + x + "," + y + "," + real.font + "," + real.fillStyle + ")");
+    real.fillText(text, x, y);
+  };
+
+  for (const name of CANVAS_STATE) {
+    Object.defineProperty(proxy, name, {
+      get: () => real[name],
+      set: (entry) => { real[name] = entry; },
+      enumerable: true
+    });
+  }
+
+  return proxy;
+}
+
+function drawingKey(context) {
+  const state = CANVAS_STATE.map((name) => name + "=" + String(context[name]));
+  const text = context.canvas.width + "x" + context.canvas.height + ";" +
+    context.__ops.join(";") + ";" + state.join(";");
+
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+
+  return hash.toString(16);
+}
+
+function probeCanvas(width, height, draw) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = recorder(canvas);
+  draw(context);
+  return { key: drawingKey(context), url: canvas.toDataURL() };
+}
+
+function readCanvas() {
   const answers = {};
 
-  const text = document.createElement("canvas");
-  text.width = 280;
-  text.height = 60;
-  const ctx = text.getContext("2d");
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "#f60";
-  ctx.fillRect(10, 10, 62, 20);
-  ctx.fillStyle = "#069";
-  ctx.font = '16px "Arial"';
-  ctx.fillText("wre sandbox 0123456789", 4, 24);
-  ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
-  ctx.font = '18px "Times New Roman"';
-  ctx.fillText("wre sandbox 0123456789", 6, 44);
-  answers["2d:text"] = await digest(text.toDataURL());
+  const wre = probeCanvas(280, 60, (context) => {
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#f60";
+    context.fillRect(10, 10, 62, 20);
+    context.fillStyle = "#069";
+    context.font = '16px "Arial"';
+    context.fillText("wre sandbox 0123456789", 4, 24);
+    context.fillStyle = "rgba(102, 204, 0, 0.7)";
+    context.font = '18px "Times New Roman"';
+    context.fillText("wre sandbox 0123456789", 6, 44);
+  });
 
-  const shapes = document.createElement("canvas");
-  shapes.width = 200;
-  shapes.height = 200;
-  const shape = shapes.getContext("2d");
-  shape.globalCompositeOperation = "multiply";
-  const colors = ["#f0f", "#0ff", "#ff0"];
-  const centers = [[50, 50], [100, 50], [75, 100]];
-  for (let index = 0; index < 3; index += 1) {
-    shape.fillStyle = colors[index];
-    shape.beginPath();
-    shape.arc(centers[index][0], centers[index][1], 50, 0, Math.PI * 2, true);
-    shape.closePath();
-    shape.fill();
-  }
-  shape.fillStyle = "#f9c";
-  shape.arc(75, 75, 75, 0, Math.PI * 2, true);
-  shape.arc(75, 75, 25, 0, Math.PI * 2, true);
-  shape.fill("evenodd");
-  answers["2d:shapes"] = await digest(shapes.toDataURL());
+  const classic = probeCanvas(240, 60, (context) => {
+    context.textBaseline = "top";
+    context.font = '14px "Arial"';
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#f60";
+    context.fillRect(125, 1, 62, 20);
+    context.fillStyle = "#069";
+    context.fillText("Cwm fjordbank glyphs vext quiz, 😃", 2, 15);
+    context.fillStyle = "rgba(102, 204, 0, 0.2)";
+    context.fillText("Cwm fjordbank glyphs vext quiz, 😃", 4, 17);
+  });
+
+  const pixel = probeCanvas(300, 60, (context) => {
+    context.textBaseline = "top";
+    context.font = "14px 'Arial'";
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#f60";
+    context.fillRect(125, 1, 62, 20);
+    context.fillStyle = "#069";
+    context.fillText("Soft Ruddy Foothold 2", 2, 15);
+    context.fillStyle = "rgba(102, 204, 0, 0.7)";
+    context.fillText("Soft Ruddy Foothold 2", 4, 17);
+  });
+
+  const akamai = probeCanvas(300, 60, (context) => {
+    context.fillStyle = "rgb(255,153,153)";
+    context.fillRect(0, 0, 300, 60);
+    context.fillStyle = "rgba(255, 153, 153, 0.5)";
+    context.font = "18pt Tahoma";
+    context.fillText("Soft Ruddy Foothold 2", 2, 2);
+    context.fillStyle = "rgb(102, 204, 0)";
+    context.fillText("!H71JCaj)]# 1@#", 4, 8);
+  });
+
+  const shapes = probeCanvas(200, 200, (context) => {
+    context.globalCompositeOperation = "multiply";
+    const colors = ["#f0f", "#0ff", "#ff0"];
+    const centers = [[50, 50], [100, 50], [75, 100]];
+    for (let index = 0; index < 3; index += 1) {
+      context.fillStyle = colors[index];
+      context.beginPath();
+      context.arc(centers[index][0], centers[index][1], 50, 0, Math.PI * 2, true);
+      context.closePath();
+      context.fill();
+    }
+    context.fillStyle = "#f9c";
+    context.arc(75, 75, 75, 0, Math.PI * 2, true);
+    context.arc(75, 75, 25, 0, Math.PI * 2, true);
+    context.fill();
+  });
+
+  for (const probe of [wre, classic, pixel, akamai, shapes]) answers[probe.key] = probe.url;
+  answers.default = classic.url;
 
   const gl3d = document.createElement("canvas");
   gl3d.width = 128;
@@ -343,7 +680,7 @@ async function readCanvas() {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    answers["webgl:clear"] = await digest(gl3d.toDataURL());
+    answers["webgl"] = gl3d.toDataURL();
   }
 
   return answers;
@@ -357,8 +694,23 @@ function readWindowOrder() {
   }
 }
 
+async function waitForVoices() {
+  if (!window.speechSynthesis) return;
+  if (speechSynthesis.getVoices().length) return;
+
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1500);
+    speechSynthesis.addEventListener("voiceschanged", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
 async function collect() {
-  const webgl = readWebgl();
+  const webgl = readWebgl("webgl");
+  const webgl2 = readWebgl("webgl2");
+  await waitForVoices();
 
   const profile = {
     interfaces: [
@@ -367,14 +719,29 @@ async function collect() {
       readInterface("Window", "Window", "globalThis", window, WINDOW_KEYS)
     ],
     plugins: readPlugins(),
+    mime_types: readMimeTypes(),
+    user_agent_data: await readUserAgentData(),
+    connection: readConnection(),
+    intl: readIntl(),
     webgl_parameters: webgl.parameters,
     webgl_extensions: webgl.extensions,
+    webgl2_parameters: webgl2.parameters,
+    webgl2_extensions: webgl2.extensions,
     media_support: readMediaSupport(),
     media_queries: readMediaQueries(),
     permissions: await readPermissions(),
     font_widths: readFontWidths(),
+    font_probe: FONT_PROBE_SIZE + " " + FONT_PROBE_TEXT,
     layout: readLayout(),
-    canvas: await readCanvas(),
+    canvas: readCanvas(),
+    audio: await readAudio(),
+    battery: await readBattery(),
+    voices: readVoices(),
+    media_devices: await readDevices(),
+    memory: readMemory(),
+    orientation: readOrientation(),
+    chrome: readChrome(),
+    document: readDocument(),
     window_order: readWindowOrder()
   };
 
@@ -401,8 +768,12 @@ function localFindings(record) {
   if (/SwiftShader|llvmpipe|Mesa OffScreen/.test(renderer)) findings.push("software WebGL renderer: " + renderer);
   if (!renderer) findings.push("no unmasked WebGL renderer, WEBGL_debug_renderer_info is unavailable");
   if (!record.profile.plugins.length) findings.push("no plugins were listed");
-  if (Object.keys(record.profile.canvas).some((key) => String(record.profile.canvas[key]).indexOf("fnv1a:") === 0)) {
-    findings.push("canvas hashes use fnv1a, crypto.subtle needs a secure context (use 127.0.0.1 or https)");
+  if (!Object.keys(record.profile.canvas).length) findings.push("no canvas images were read");
+  if (!record.profile.voices.length) findings.push("speechSynthesis listed no voices");
+  if (!record.profile.media_devices.length) findings.push("enumerateDevices listed no devices");
+  if (!record.profile.battery) findings.push("no battery reading, getBattery is unavailable here");
+  if (record.profile.audio && !record.profile.audio.rendered) {
+    findings.push("no audio rendering hash, crypto.subtle needs a secure context (use 127.0.0.1 or https)");
   }
 
   return findings;
@@ -417,11 +788,16 @@ function renderSummary(record) {
     ["screen", record.profile.interfaces[1].properties.width + " x " + record.profile.interfaces[1].properties.height +
       " at " + record.profile.interfaces[2].properties.devicePixelRatio + "x"],
     ["webgl renderer", record.profile.webgl_parameters["37446"] || "unavailable"],
+    ["timezone", record.profile.intl.time_zone + ", offset " + record.profile.intl.timezone_offset],
     ["counts", record.profile.plugins.length + " plugins, " +
       record.profile.webgl_extensions.length + " webgl extensions, " +
       Object.keys(record.profile.media_support).length + " media types, " +
       Object.keys(record.profile.permissions).length + " permissions, " +
-      record.profile.window_order.length + " window properties"]
+      record.profile.window_order.length + " window properties"],
+    ["recorded", Object.keys(record.profile.canvas).length + " canvas images, " +
+      Object.keys(record.profile.font_widths).length + " font widths, " +
+      record.profile.voices.length + " voices, " +
+      record.profile.media_devices.length + " media devices"]
   ];
 
   document.getElementById("summary").innerHTML = rows
@@ -442,13 +818,25 @@ function say(text, tone) {
   status.className = "on";
   status.textContent = text;
   status.style.borderColor = tone === "bad" ? "#c33" : "rgba(128,128,128,0.5)";
+  document.title = "wre capture: " + text;
 }
 
 let captured = null;
 
+const settings = new URLSearchParams(location.search);
+const injected = window.__wreCapture || {};
+
 collect().then((record) => {
   captured = record;
   renderSummary(record);
+
+  if (settings.has("auto") || injected.auto) {
+    const label = settings.get("label") || injected.label || "";
+    const notes = settings.get("notes") || injected.notes || "";
+    if (label) document.getElementById("label").value = label;
+    if (notes) document.getElementById("notes").value = notes;
+    document.getElementById("send").click();
+  }
 }).catch((error) => {
   say("capture failed: " + error, "bad");
 });

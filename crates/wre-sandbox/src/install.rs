@@ -137,6 +137,10 @@ impl Sandbox {
         self.misses.all()
     }
 
+    pub fn misses_handle(&self) -> Misses {
+        self.misses.clone()
+    }
+
     pub fn installed(&self) -> &[String] {
         &self.installed
     }
@@ -239,12 +243,29 @@ fn install_plugins(realm: &mut Realm, profile: &Profile) -> Result<()> {
 
   var list = Object.create(PluginArray.prototype);
 
+  var MimeType = __wreTag(function () {{ throw new TypeError("Illegal constructor"); }}, "MimeType");
+
   described.forEach(function (entry, index) {{
     var plugin = Object.create(Plugin.prototype);
     Object.defineProperty(plugin, "name", {{ value: entry.name, enumerable: true }});
     Object.defineProperty(plugin, "filename", {{ value: entry.filename, enumerable: true }});
     Object.defineProperty(plugin, "description", {{ value: entry.description, enumerable: true }});
-    Object.defineProperty(plugin, "length", {{ value: 0, enumerable: true }});
+
+    var types = entry.mime_types || [];
+
+    types.forEach(function (name, at) {{
+      var type = Object.create(MimeType.prototype);
+      Object.defineProperty(type, "type", {{ value: name, enumerable: true }});
+      Object.defineProperty(type, "suffixes", {{ value: "pdf", enumerable: true }});
+      Object.defineProperty(type, "description", {{ value: entry.description, enumerable: true }});
+      Object.defineProperty(type, "enabledPlugin", {{ value: plugin, enumerable: true }});
+      Object.defineProperty(plugin, String(at), {{ value: type, enumerable: true }});
+      Object.defineProperty(plugin, name, {{ value: type, enumerable: false }});
+    }});
+
+    Object.defineProperty(plugin, "length", {{ value: types.length, enumerable: true }});
+    Plugin.prototype.item = function (at) {{ return this[at] || null; }};
+    Plugin.prototype.namedItem = function (name) {{ return this[name] || null; }};
 
     Object.defineProperty(list, String(index), {{ value: plugin, enumerable: true }});
     Object.defineProperty(list, entry.name, {{ value: plugin, enumerable: false }});
@@ -401,7 +422,11 @@ __wreInterface("Permissions", "");
     realm.brand_object("PermissionStatus.prototype", "PermissionStatus")?;
     realm.brand_object("Permissions.prototype", "Permissions")?;
 
-    let queries = profile.media_queries.clone();
+    let queries: BTreeMap<String, bool> = profile
+        .media_queries
+        .iter()
+        .map(|(query, answer)| (tighten(query), *answer))
+        .collect();
     let watcher = misses.clone();
 
     realm.register(
@@ -416,7 +441,7 @@ __wreInterface("Permissions", "");
                 .unwrap_or_default()
                 .to_string();
 
-            let matches = match queries.get(&key) {
+            let matches = match queries.get(&tighten(&key)) {
                 Some(answer) => *answer,
                 None => {
                     watcher.record(&format!("matchMedia({key})"));
@@ -455,6 +480,11 @@ __wreInterface("Permissions", "");
                 .to_string();
 
             match permissions.get(&key) {
+                Some(state) if state == "invalid" => Err(Error::msg(format!(
+                    "Failed to execute 'query' on 'Permissions': Failed to read the 'name' \
+                     property from 'PermissionDescriptor': The provided value '{key}' is not a \
+                     valid enum value of type PermissionName."
+                ))),
                 Some(state) => Ok(json!({ "name": key, "state": state })),
                 None => {
                     watcher.record(&format!("permissions.query({key})"));
@@ -499,6 +529,10 @@ __wreInterface("Permissions", "");
 "#,
         "wre:queries",
     )
+}
+
+fn tighten(query: &str) -> String {
+    query.chars().filter(|character| !character.is_whitespace()).collect()
 }
 
 fn render_key(value: &Value) -> String {

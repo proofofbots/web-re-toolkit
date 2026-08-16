@@ -1,5 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +38,7 @@ pub struct Stored {
 pub struct Server {
     listener: TcpListener,
     address: SocketAddr,
+    auto: Option<String>,
 }
 
 impl Server {
@@ -44,7 +47,25 @@ impl Server {
             .map_err(|error| Error::msg(format!("cannot listen on {host}:{port}: {error}")))?;
         let address = listener.local_addr().map_err(io("listener"))?;
 
-        Ok(Self { listener, address })
+        Ok(Self { listener, address, auto: None })
+    }
+
+    pub fn sending_on_its_own(mut self, label: Option<String>) -> Self {
+        self.auto = Some(label.unwrap_or_default());
+        self
+    }
+
+    pub fn page(&self) -> String {
+        let Some(label) = &self.auto else {
+            return PAGE.to_string();
+        };
+
+        let marker = format!(
+            "<script>window.__wreCapture = {{ auto: true, label: {} }};</script>\n</head>",
+            json!(label)
+        );
+
+        PAGE.replacen("</head>", &marker, 1)
     }
 
     pub fn address(&self) -> SocketAddr {
@@ -64,34 +85,59 @@ impl Server {
     where
         F: FnMut(Incoming, &str) -> Result<Stored>,
     {
-        let mut taken = 0usize;
+        let listener = self.listener.try_clone().map_err(io("listener"))?;
+        let (jobs, inbox) = mpsc::channel::<Job>();
+        let page = Arc::new(self.page());
 
-        for stream in self.listener.incoming() {
-            let mut stream = match stream {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::warn!("sandbox capture connection failed: {error}");
-                    continue;
-                }
-            };
+        std::thread::Builder::new()
+            .name("wre-capture-accept".to_string())
+            .spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let jobs = jobs.clone();
+                    let page = Arc::clone(&page);
 
-            let peer = stream
-                .peer_addr()
-                .map(|address| address.ip().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
+                    let spawned = std::thread::Builder::new()
+                        .name("wre-capture-connection".to_string())
+                        .spawn(move || {
+                            let peer = stream
+                                .peer_addr()
+                                .map(|address| address.ip().to_string())
+                                .unwrap_or_else(|_| "unknown".to_string());
 
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
 
-            match handle(&mut stream, &peer, &mut store) {
-                Ok(true) => {
-                    taken += 1;
-                    if !keep {
-                        return Ok(taken);
+                            if let Err(error) = handle(&mut stream, &peer, &jobs, &page) {
+                                tracing::debug!("sandbox capture request failed: {error}");
+                            }
+                        });
+
+                    if spawned.is_err() {
+                        tracing::warn!("sandbox capture could not start a connection thread");
                     }
                 }
-                Ok(false) => {}
-                Err(error) => tracing::warn!("sandbox capture request failed: {error}"),
+            })
+            .map_err(io("listener"))?;
+
+        let mut taken = 0usize;
+
+        while let Ok(job) = inbox.recv() {
+            let outcome = store(job.incoming, &job.peer);
+            let answered = match &outcome {
+                Ok(stored) => job.reply.send(Ok(stored.clone())),
+                Err(error) => job.reply.send(Err(error.to_string())),
+            };
+
+            if answered.is_err() {
+                tracing::debug!("the capture client left before the answer was written");
+            }
+
+            if outcome.is_ok() {
+                taken += 1;
+                if !keep {
+                    return Ok(taken);
+                }
             }
         }
 
@@ -99,10 +145,18 @@ impl Server {
     }
 }
 
-fn handle<F>(stream: &mut TcpStream, peer: &str, store: &mut F) -> Result<bool>
-where
-    F: FnMut(Incoming, &str) -> Result<Stored>,
-{
+struct Job {
+    incoming: Incoming,
+    peer: String,
+    reply: mpsc::Sender<std::result::Result<Stored, String>>,
+}
+
+fn handle(
+    stream: &mut TcpStream,
+    peer: &str,
+    jobs: &mpsc::Sender<Job>,
+    page: &str,
+) -> Result<bool> {
     let (head, rest) = read_head(stream)?;
     let mut lines = head.split("\r\n");
     let request = lines.next().unwrap_or_default();
@@ -112,7 +166,7 @@ where
 
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => {
-            respond(stream, 200, "text/html; charset=utf-8", PAGE.as_bytes())?;
+            respond(stream, 200, "text/html; charset=utf-8", page.as_bytes())?;
             Ok(false)
         }
 
@@ -129,14 +183,28 @@ where
                 }
             };
 
-            match store(incoming, peer) {
-                Ok(stored) => {
+            let (reply, answer) = mpsc::channel();
+
+            if jobs
+                .send(Job { incoming, peer: peer.to_string(), reply })
+                .is_err()
+            {
+                let message = json!({ "error": "the capture host stopped listening" });
+                respond_json(stream, 503, &message)?;
+                return Ok(false);
+            }
+
+            match answer.recv() {
+                Ok(Ok(stored)) => {
                     respond_json(stream, 200, &json!(stored))?;
                     Ok(true)
                 }
-                Err(error) => {
-                    let message = json!({ "error": error.to_string() });
-                    respond_json(stream, 500, &message)?;
+                Ok(Err(error)) => {
+                    respond_json(stream, 500, &json!({ "error": error }))?;
+                    Ok(false)
+                }
+                Err(_) => {
+                    respond_json(stream, 500, &json!({ "error": "the capture host went away" }))?;
                     Ok(false)
                 }
             }

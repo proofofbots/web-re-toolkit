@@ -133,6 +133,34 @@ pub fn audit(profile: &Profile) -> Vec<Finding> {
         findings.push(Finding::warn("a mobile user agent with maxTouchPoints 0"));
     }
 
+    if let Some(data) = &profile.user_agent_data {
+        let claimed = data
+            .brands
+            .iter()
+            .find(|brand| brand.brand.contains("Chrome") || brand.brand.contains("Chromium"))
+            .map(|brand| brand.version.clone())
+            .unwrap_or_default();
+
+        let running = agent
+            .split("Chrome/")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+            .unwrap_or_default()
+            .to_string();
+
+        if !claimed.is_empty() && !running.is_empty() && claimed != running {
+            findings.push(Finding::warn(format!(
+                "userAgentData says Chrome {claimed} but the user agent says Chrome {running}"
+            )));
+        }
+    }
+
+    if let Some(intl) = &profile.intl
+        && intl.time_zone.is_empty()
+    {
+        findings.push(Finding::note("no timezone was captured"));
+    }
+
     for (what, empty) in [
         ("webgl_extensions", profile.webgl_extensions.is_empty()),
         ("webgl_parameters", profile.webgl_parameters.is_empty()),
@@ -141,6 +169,10 @@ pub fn audit(profile: &Profile) -> Vec<Finding> {
         ("permissions", profile.permissions.is_empty()),
         ("font_widths", profile.font_widths.is_empty()),
         ("window_order", profile.window_order.is_empty()),
+        ("canvas", profile.canvas.is_empty()),
+        ("voices", profile.voices.is_empty()),
+        ("media_devices", profile.media_devices.is_empty()),
+        ("mime_types", profile.mime_types.is_empty()),
     ] {
         if empty {
             findings.push(Finding::note(format!("{what} is empty, the sandbox will record misses")));
