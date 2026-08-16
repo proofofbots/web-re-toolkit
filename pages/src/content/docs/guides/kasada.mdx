@@ -3,6 +3,19 @@ title: The Kasada client
 description: Answer a Kasada interrogation without a browser and carry the token the edge issues into your own requests.
 ---
 
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Just want to run it?">
+Install the package and copy a working run. This guide is how the client works, not how to use it.
+</Aside>
+
+<CardGrid>
+  <LinkCard title="Node.js" description="npm install @proofofbot/client-kasada" href="/web-re-toolkit/packages/kasada/node/" />
+  <LinkCard title="Python" description="pip install wre-client-kasada" href="/web-re-toolkit/packages/kasada/python/" />
+  <LinkCard title="Go" description="go get .../packages/go/clients/kasada" href="/web-re-toolkit/packages/kasada/go/" />
+  <LinkCard title="Rust" description="wre-sdk-kasada by path" href="/web-re-toolkit/packages/kasada/rust/" />
+</CardGrid>
+
 `clients/kasada` answers a Kasada Bot Defence interrogation without a browser. It fetches the url you want, and when the edge answers with the interrogation page instead, it runs that page's own `ips.js` in a `wre-live` realm, lets the script post what it builds, and keeps the token the edge answers with.
 
 Nothing about the payload is reimplemented. The vendor's own script computes it, which is why a rebuild of the agent does not break this client.

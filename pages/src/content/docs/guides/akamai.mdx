@@ -3,6 +3,19 @@ title: The Akamai client
 description: Warm an Akamai Bot Manager session without a browser and carry its cookies into your own requests.
 ---
 
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Just want to run it?">
+Install the package and copy a working run. This guide is how the client works, not how to use it.
+</Aside>
+
+<CardGrid>
+  <LinkCard title="Node.js" description="npm install @proofofbot/client-akamai" href="/web-re-toolkit/packages/akamai/node/" />
+  <LinkCard title="Python" description="pip install wre-client-akamai" href="/web-re-toolkit/packages/akamai/python/" />
+  <LinkCard title="Go" description="go get .../packages/go/clients/akamai" href="/web-re-toolkit/packages/akamai/go/" />
+  <LinkCard title="Rust" description="wre-sdk-akamai by path" href="/web-re-toolkit/packages/akamai/rust/" />
+</CardGrid>
+
 `clients/akamai` warms an Akamai Bot Manager session without a browser and then carries it: it fetches the page, finds the sensor script the page names, runs that script unmodified inside a `wre-live` realm with the `wre-sandbox` browser surface, posts what the script builds, and hands the session's cookies to whatever request you want to make next.
 
 Nothing about the payload is reimplemented. The vendor's own script computes it, which is why a rebuild of the sensor does not break this client.
