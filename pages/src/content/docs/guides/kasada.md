@@ -38,7 +38,7 @@ The other ops: `discover` reports the wiring without running anything, `loader` 
 | field | default | what it does |
 | --- | --- | --- |
 | `page_url` | none | url the session solves for when an op does not name one |
-| `profile` | first in the library | graph profile id, from `wre sandbox list` |
+| `profile` | first captured, else the bundled one | graph profile id, from `wre sandbox list` |
 | `fingerprint` | from the user agent | transport fingerprint as `profile[:platform]` |
 | `user_agent` | the profile's | overrides what the sandbox and the transport both claim |
 | `proxy` | none | http or socks5 url the session and the sandbox both go through |
@@ -56,12 +56,28 @@ The other ops: `discover` reports the wiring without running anything, `loader` 
 
 The interrogation enumerates the whole global surface: every own property of `window`, in order, with shapes and sources. A property table cannot answer that, so this client mounts a **graph profile**, which is a captured object graph rather than a list of readings.
 
+One graph is compiled into the binary, `macos-chrome-151`, captured from a real MacBook running Chrome 151. A session with nothing captured mounts that, so `solve` works on a fresh install and with no workspace on disk.
+
+Capture your own when you want a graph that is not shared with every other user of this toolkit, or one from a different browser or platform:
+
 ```
 wre sandbox capture --graph --open --label "MacBook Pro, Chrome 151"
 wre sandbox list
 ```
 
-That writes `profiles/graph/<id>.json`. Point the client at one with `profile`, or leave it and the first in the directory is used. Without one, `solve` fails with a `resource` error saying so; `discover`, `request` and `pow` still work, because none of them mount anything.
+That writes `profiles/graph/<id>.json`. `wre sandbox list` marks each graph `captured` or `bundled`.
+
+Selection: `profile` names an id, from the captured directory first and the bundled set second. With no `profile`, the first captured graph is used, and the bundled one when nothing is captured.
+
+## Contributing a profile
+
+A graph is per browser build and per platform, so the bundled set only covers what people have sent in. To add yours:
+
+1. `wre sandbox capture --graph --open --label "ThinkPad X1, Chrome 152 on Linux"`
+2. `gzip -9 -c profiles/graph/<id>.json > crates/wre-sandbox/assets/graph/profiles/<id>.json.gz`
+3. Open a PR with that one file. The build script picks up every `.json.gz` in that directory, so nothing else needs editing.
+
+Use an id that names the browser and platform, `linux-chrome-152`, not the machine. A gzipped graph is around 600 KB. The capture is a real reading of your machine, including user agent, system colors, audio and WebGL values, and it becomes public in the repository, so send one from a machine you are happy to describe. Changing which id is the default is a separate change to `BUNDLED_ID` in `crates/wre-sandbox/src/graph.rs`.
 
 [The browser surface](/web-re-toolkit/guides/sandbox/) covers what a graph carries and how it differs from the property profiles the other clients use.
 

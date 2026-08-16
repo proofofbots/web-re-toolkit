@@ -3,14 +3,14 @@
 Runnable scripts that drive a client through the sidecar, one per language. Each one reaches a live
 endpoint.
 
-Both need a `wred` binary and, for the Kasada scripts, a graph profile in `profiles/graph`:
+Both need a `wred` binary:
 
 ```bash
 cargo build -p wre-clientd
 export WRE_BINARY="$PWD/target/debug/wred"
-
-./target/debug/wre sandbox capture --graph --open --label "this machine"
 ```
+
+The Kasada scripts mount a graph profile. The binary carries one, so they run as they are. `wre sandbox capture --graph --open` records your own into `profiles/graph`, and the first one there wins over the bundled graph.
 
 ## Node
 

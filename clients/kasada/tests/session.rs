@@ -203,7 +203,6 @@ fn a_proof_of_work_header_is_built_from_a_token_and_a_salt() {
 }
 
 #[test]
-#[ignore = "needs a graph profile in profiles/graph"]
 fn a_session_that_answers_the_interrogation_is_served_the_page() {
     let edge = serve();
     let page = format!("http://127.0.0.1:{}/buy", edge.port);

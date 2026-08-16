@@ -85,6 +85,8 @@ For those, capture a **graph profile**: the object graph itself.
 wre sandbox capture --graph --open --label "MacBook Pro, Chrome 151"
 ```
 
+`macos-chrome-151` is compiled into the binary and used when nothing is captured, the same way `builtin-desktop-chrome` covers property profiles. Capture your own for a graph that is not shared with every other user, or for a browser and platform the bundled set does not cover; [contributing a profile](/web-re-toolkit/guides/kasada/#contributing-a-profile) covers sending one back.
+
 The page walks from `window`, `navigator`, `screen`, `location`, `history`, `performance`, `crypto` and `Intl` through every own property, recording each object's own names in order, each property's descriptor flags, whether it is an accessor and what it reads, each function's name, length and whether it is native, and every prototype link. Getters are invoked and their answers recorded; the ones that throw are recorded as throwing. The result lands in `profiles/graph/<id>.json` and is measured in tens of thousands of objects rather than dozens of properties.
 
 Alongside the graph the page records the tables that a captured graph cannot hold, because they are measurements rather than values: layout boxes, the computed style shape, `canPlayType` answers, the own property names of every interface read from a clean realm, per call timings, WebGL parameters, the traits a script probes for (the audio render, the keyboard layout, a WebRTC offer, the battery, the client hints, the read order of every event init dictionary), and the viewport.

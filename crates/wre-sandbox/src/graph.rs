@@ -1,8 +1,10 @@
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use flate2::read::GzDecoder;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,6 +19,18 @@ const BRIDGE: &str = include_str!("../assets/graph/bridge.js");
 const BOOTSTRAP: &str = include_str!("../assets/graph/bootstrap.js");
 const DOM: &str = include_str!("../assets/graph/dom.js");
 const CONTROL: &str = include_str!("../assets/graph/control.js");
+
+include!(concat!(env!("OUT_DIR"), "/bundled_graphs.rs"));
+
+pub const BUNDLED_ID: &str = "macos-chrome-151";
+
+pub fn bundled_ids() -> Vec<String> {
+    BUNDLED_GRAPHS.iter().map(|(id, _)| (*id).to_string()).collect()
+}
+
+pub fn is_bundled(id: &str) -> bool {
+    BUNDLED_GRAPHS.iter().any(|(known, _)| *known == id)
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Tables {
@@ -132,21 +146,58 @@ impl GraphProfile {
 
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)
+        let raw = std::fs::read(path)
             .map_err(|error| Error::msg(format!("{}: {error}", path.display())))?;
 
-        let mut profile: Self = serde_json::from_str(&text)
+        let mut profile = Self::parse(&raw)
             .map_err(|error| Error::msg(format!("{}: {error}", path.display())))?;
 
         if profile.id.is_empty() {
-            profile.id = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().to_string())
-                .unwrap_or_default();
+            profile.id = profile_id(path);
         }
 
         Ok(profile)
     }
+
+    pub fn bundled(id: &str) -> Result<Self> {
+        let (_, packed) = BUNDLED_GRAPHS
+            .iter()
+            .find(|(known, _)| *known == id)
+            .ok_or_else(|| Error::msg(format!("no bundled graph profile {id}")))?;
+
+        let mut profile = Self::parse(packed)
+            .map_err(|error| Error::msg(format!("the bundled graph {id} did not load: {error}")))?;
+
+        if profile.id.is_empty() {
+            profile.id = id.to_string();
+        }
+
+        Ok(profile)
+    }
+
+    fn parse(raw: &[u8]) -> Result<Self> {
+        let text = if raw.starts_with(&[0x1f, 0x8b]) {
+            let mut decoded = String::new();
+            GzDecoder::new(raw)
+                .read_to_string(&mut decoded)
+                .map_err(|error| Error::msg(format!("gzip: {error}")))?;
+            decoded
+        } else {
+            String::from_utf8(raw.to_vec())
+                .map_err(|error| Error::msg(format!("not utf-8: {error}")))?
+        };
+
+        serde_json::from_str(&text).map_err(|error| Error::msg(error.to_string()))
+    }
+}
+
+fn profile_id(path: &std::path::Path) -> String {
+    let name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+
+    name.strip_suffix(".json.gz")
+        .or_else(|| name.strip_suffix(".json"))
+        .unwrap_or(&name)
+        .to_string()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -186,17 +237,17 @@ impl GraphLibrary {
 
             for entry in listing.flatten() {
                 let path = entry.path();
+                let name = path.file_name().map(|name| name.to_string_lossy().to_string());
 
-                if path.extension().and_then(|kind| kind.to_str()) != Some("json") {
+                let Some(name) = name else {
+                    continue;
+                };
+
+                if !name.ends_with(".json") && !name.ends_with(".json.gz") {
                     continue;
                 }
 
-                let id = path
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                paths.push((id, path));
+                paths.push((profile_id(&path), path));
             }
         }
 
@@ -245,17 +296,19 @@ impl GraphLibrary {
 
     pub fn resolve(&self, wanted: Option<&str>) -> Result<GraphProfile> {
         let chosen = match wanted {
-            Some(id) => self
-                .paths
-                .iter()
-                .find(|(known, _)| known == id)
-                .ok_or_else(|| {
-                    Error::msg(format!("no graph profile {id}; have {:?}", self.ids()))
-                })?,
-            None => self
-                .paths
-                .first()
-                .ok_or_else(|| Error::msg("the graph profile library is empty"))?,
+            Some(id) => match self.paths.iter().find(|(known, _)| known == id) {
+                Some(found) => found,
+                None if is_bundled(id) => return GraphProfile::bundled(id),
+                None => {
+                    let mut known = self.ids();
+                    known.extend(bundled_ids());
+                    return Err(Error::msg(format!("no graph profile {id}; have {known:?}")));
+                }
+            },
+            None => match self.paths.first() {
+                Some(found) => found,
+                None => return GraphProfile::bundled(BUNDLED_ID),
+            },
         };
 
         GraphProfile::read(&chosen.1)
@@ -747,5 +800,29 @@ impl Graph {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         list.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundled_graph_loads() {
+        let profile = GraphProfile::bundled(BUNDLED_ID).expect("bundled graph");
+
+        assert_eq!(profile.id, BUNDLED_ID);
+        assert!(profile.objects() > 0);
+        assert!(!profile.user_agent.is_empty());
+    }
+
+    #[test]
+    fn an_empty_library_falls_back_to_the_bundled_graph() {
+        let library = GraphLibrary::default();
+
+        assert!(library.is_empty());
+        assert_eq!(library.resolve(None).expect("resolve").id, BUNDLED_ID);
+        assert_eq!(library.resolve(Some(BUNDLED_ID)).expect("resolve").id, BUNDLED_ID);
+        assert!(library.resolve(Some("nothing-like-this")).is_err());
     }
 }

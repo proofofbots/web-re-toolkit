@@ -14,11 +14,7 @@ wre client package --bundle default
 wre-sdk-kasada = { path = "dist/default/packages/rust/kasada" }
 ```
 
-A Kasada session mounts a graph profile, so capture one before the first run:
-
-```bash
-wre sandbox capture --graph --open --label "this machine"
-```
+A Kasada session mounts a graph profile. One is compiled into the binary, so there is nothing to capture before the first run. Capture your own with `wre sandbox capture --graph --open` and pass its id as `profile` when you want a graph that is not shared with every other user, or one from a different browser.
 
 ```rust
 use wre_sdk_kasada::{Client, KasadaConfig, OpenOptions, SolveInput};

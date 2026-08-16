@@ -470,20 +470,13 @@ fn build(ctx: Ctx, config: Value) -> ClientResult<Box<dyn Client>> {
 }
 
 fn resolve_profile(ctx: &Ctx, config: &Config) -> ClientResult<GraphProfile> {
-    let Some(workspace) = ctx.workspace() else {
-        return Err(ClientError::resource(
-            "no workspace on disk, so there is no graph profile to mount; run wre sandbox capture --graph",
-        ));
+    let library = match ctx.workspace() {
+        Some(workspace) => GraphLibrary::load(workspace.join("profiles").join("graph"))
+            .map_err(|error| {
+                ClientError::resource(format!("the profile library failed: {error}"))
+            })?,
+        None => GraphLibrary::default(),
     };
-
-    let library = GraphLibrary::load(workspace.join("profiles").join("graph"))
-        .map_err(|error| ClientError::resource(format!("the profile library failed: {error}")))?;
-
-    if library.is_empty() {
-        return Err(ClientError::resource(
-            "profiles/graph is empty; record one with wre sandbox capture --graph",
-        ));
-    }
 
     library
         .resolve(config.profile.as_deref())

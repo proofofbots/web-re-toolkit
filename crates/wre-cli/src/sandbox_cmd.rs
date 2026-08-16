@@ -4,7 +4,7 @@ use wre_cdp::chrome::{Chrome, LaunchOptions};
 use wre_core::error::{Error, Result, io, json as json_error};
 use wre_live::realm::{Realm, RealmOptions};
 use wre_sandbox::capture::{Incoming, Server, Stored, Taken};
-use wre_sandbox::graph::{GraphLibrary, GraphProfile};
+use wre_sandbox::graph::{GraphLibrary, GraphProfile, bundled_ids};
 use wre_sandbox::library::{Library, Record, now};
 use wre_sandbox::{Finding, Profile, audit, install, warnings};
 
@@ -223,23 +223,35 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
             let graphs = GraphLibrary::load(&graph_dir).unwrap_or_default();
             let mut described = Vec::new();
 
+            let mut listed = graphs.ids();
+            for id in bundled_ids() {
+                if !listed.contains(&id) {
+                    listed.push(id);
+                }
+            }
+
             if graphs.is_empty() {
-                plain.push_str("no captured graphs yet, run `wre sandbox capture --graph`\n");
-            } else {
+                plain.push_str("no captured graphs yet, the bundled one is used instead\n");
+            }
+
+            if !listed.is_empty() {
                 plain.push_str(
-                    "\n| graph | captured | objects | tables |\n| --- | --- | --- | --- |\n",
+                    "\n| graph | captured | objects | tables | source |\n| --- | --- | --- | --- | --- |\n",
                 );
 
-                for id in graphs.ids() {
+                for id in listed {
                     let Ok(profile) = graphs.resolve(Some(&id)) else {
                         continue;
                     };
 
+                    let bundled = !graphs.ids().contains(&id);
+
                     plain.push_str(&format!(
-                        "| {id} | {} | {} | {} |\n",
+                        "| {id} | {} | {} | {} | {} |\n",
                         profile.captured_at,
                         profile.objects(),
-                        profile.tables.present().join(" ")
+                        profile.tables.present().join(" "),
+                        if bundled { "bundled" } else { "captured" }
                     ));
 
                     described.push(json!({
@@ -249,6 +261,7 @@ pub async fn run(context: &Context, command: SandboxCommand) -> Result<()> {
                         "user_agent": profile.user_agent,
                         "objects": profile.objects(),
                         "tables": profile.tables.present(),
+                        "bundled": bundled,
                     }));
                 }
 
