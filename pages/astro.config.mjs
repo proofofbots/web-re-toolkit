@@ -57,6 +57,24 @@ export default defineConfig({
 					label: 'Packages',
 					items: [
 						{ label: 'Overview', slug: 'packages' },
+						{
+							label: 'Akamai',
+							items: [
+								{ label: 'Node.js', slug: 'packages/akamai/node' },
+								{ label: 'Python', slug: 'packages/akamai/python' },
+								{ label: 'Go', slug: 'packages/akamai/go' },
+								{ label: 'Rust', slug: 'packages/akamai/rust' },
+							],
+						},
+						{
+							label: 'Kasada',
+							items: [
+								{ label: 'Node.js', slug: 'packages/kasada/node' },
+								{ label: 'Python', slug: 'packages/kasada/python' },
+								{ label: 'Go', slug: 'packages/kasada/go' },
+								{ label: 'Rust', slug: 'packages/kasada/rust' },
+							],
+						},
 						{ label: 'Node.js', slug: 'packages/node' },
 						{ label: 'Python', slug: 'packages/python' },
 						{ label: 'Go', slug: 'packages/go' },

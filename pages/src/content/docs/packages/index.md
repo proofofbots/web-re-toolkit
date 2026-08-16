@@ -18,6 +18,13 @@ Install a client package for one target, or a runtime package to drive several t
 
 `example` is a worked adapter against a demo collector, not a real service. Use it to learn the API.
 
+Akamai and Kasada have a page per language, each with a full run against a live endpoint:
+
+| Target | Node.js | Python | Go | Rust |
+| --- | --- | --- | --- | --- |
+| `akamai` | [Node.js](/web-re-toolkit/packages/akamai/node/) | [Python](/web-re-toolkit/packages/akamai/python/) | [Go](/web-re-toolkit/packages/akamai/go/) | [Rust](/web-re-toolkit/packages/akamai/rust/) |
+| `kasada` | [Node.js](/web-re-toolkit/packages/kasada/node/) | [Python](/web-re-toolkit/packages/kasada/python/) | [Go](/web-re-toolkit/packages/kasada/go/) | [Rust](/web-re-toolkit/packages/kasada/rust/) |
+
 ## Runtimes
 
 Use a runtime directly to drive a binary that has no generated package, or several targets from one process.
