@@ -6,6 +6,8 @@ Everything target-specific lives in one manifest. Everything else is shared libr
 
 Documentation: https://proofofbots.github.io/web-re-toolkit/
 
+Discord: https://discord.gg/nbBePnsa9
+
 ## Install
 
 ```bash

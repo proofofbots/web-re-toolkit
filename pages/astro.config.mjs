@@ -16,6 +16,11 @@ export default defineConfig({
 					label: 'GitHub',
 					href: 'https://github.com/proofofbots/web-re-toolkit',
 				},
+				{
+					icon: 'discord',
+					label: 'Discord',
+					href: 'https://discord.gg/nbBePnsa9',
+				},
 			],
 			editLink: {
 				baseUrl: 'https://github.com/proofofbots/web-re-toolkit/edit/main/pages/',
