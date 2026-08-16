@@ -1,0 +1,67 @@
+{
+  "target": "akamai",
+  "config": {
+    "wait_ms": 1000,
+    "rounds": 1,
+    "behaviour": false,
+    "pixel": false,
+    "seed": 7
+  },
+  "cases": [
+    {
+      "name": "info reports the target",
+      "op": "info",
+      "params": {},
+      "expect": { "target": "akamai", "open": false }
+    },
+    {
+      "name": "info names the profile it will replay",
+      "op": "info",
+      "params": {},
+      "expect_keys": ["profile", "user_agent", "profiles"]
+    },
+    {
+      "name": "the proof of work answers a challenge from a cookie",
+      "op": "pow",
+      "params": {
+        "abck": "TOKEN~-1~salt~-1~3-abcd-500-1000-30-2",
+        "start_ts": 1760000000000,
+        "rounds": 3
+      },
+      "expect": {
+        "prefix": "TOKEN1760000000000abcd",
+        "nonces": ["3cf", "8c", "45"]
+      }
+    },
+    {
+      "name": "a cookie with no work item has nothing to answer",
+      "op": "pow",
+      "params": { "abck": "TOKEN~-1~salt~-1~-1", "start_ts": 1760000000000 },
+      "expect_error": "unsupported"
+    },
+    {
+      "name": "the jar starts empty",
+      "op": "cookies",
+      "params": {},
+      "expect": { "header": "", "names": [] }
+    },
+    {
+      "name": "building a payload needs a session",
+      "op": "payload",
+      "params": {},
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "solve needs a page",
+      "op": "solve",
+      "params": {},
+      "expect_error": "bad_input"
+    },
+    {
+      "name": "reset reports no session",
+      "op": "reset",
+      "params": {},
+      "expect": { "open": false }
+    }
+  ]
+}
