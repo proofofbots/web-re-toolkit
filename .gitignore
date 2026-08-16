@@ -1,6 +1,7 @@
 target/
 artifacts/
 dist/
+profiles/
 node_modules/
 __pycache__/
 *.clean.js

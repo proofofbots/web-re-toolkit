@@ -70,7 +70,7 @@ Grading what you built, and planning the runs that attribute a detection:
 wre grade built.json --real capture-1.json capture-2.json
 wre align --before a1.json a2.json --after b1.json b2.json
 
-wre sandbox capture
+wre sandbox capture --open
 wre sandbox check --all
 wre markers --kind concealment
 wre pools
@@ -86,7 +86,7 @@ wre pools
 | `wre-pow` | key derivations, hash chains, acceptance rules by prefix, leading zeros, folded modulus or score threshold, multi round challenges, parallel search |
 | `wre-ident` | name blind shape hashing, weighted evidence for locating a role, cross build function pairing, the lock file and the drift report |
 | `wre-signals` | value based slot alignment across builds, permutation and rotation recovery, noise filtering, provenance from an access trace |
-| `wre-sandbox` | a browser surface installed as native V8 bindings, driven by a library of profiles captured off real devices, with a miss log |
+| `wre-sandbox` | a browser surface installed as native V8 bindings, a document, event and timer layer on top of it, a library of profiles captured off real devices, and a miss log |
 | `wre-oracle` | finding the response feature that reflects payload state, and grading a built payload against real ones |
 | `wre-behavior` | deterministic pointer, touch and key streams with timing that is not a constant |
 | `wre-net` | SOCKS5 proxies with session rotation, an HTTP client that emulates a browser's TLS and HTTP/2 fingerprint, ClientHello parsing and building, JA3 and JA4, HPACK with Huffman, the Akamai HTTP/2 fingerprint |
@@ -127,6 +127,7 @@ A session owns the mounted realm and the cookies, so a caller opens one and reus
 | --- | --- |
 | [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) | locating a target's roles without depending on the text of one build, and reading the next one |
 | [docs/SANDBOX.md](docs/SANDBOX.md) | the browser surface, why it is native rather than JavaScript, and what it still does not have |
+| [docs/AKAMAI.md](docs/AKAMAI.md) | running a live Akamai sensor headlessly and carrying the session it produces |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | writing a headless client |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | the sidecar wire contract |
 
@@ -134,6 +135,7 @@ A session owns the mounted realm and the cookies, so a caller opens one and reus
 
 | target | adapter | client | research |
 | --- | --- | --- | --- |
+| akamai | any protected page | `clients/akamai` | [docs/AKAMAI.md](docs/AKAMAI.md) |
 | altcha | `targets/altcha.toml` | `clients/altcha` | [docs/research/altcha.md](docs/research/altcha.md) |
 | example | `targets/example.toml` | `clients/example` | a worked adapter, not a real service |
 
@@ -156,7 +158,7 @@ params = 1
 
 **Identity survives a rebuild.** Nothing important is found by matching the text of one build. A role is located by scoring several weak signals against a name blind normalisation of the AST: structural shape, magic constants, the property names it reaches, its position in the call graph, and where it matters, what it returns when you actually call it. The result is written to a lock file, and the next build is diffed against that lock, so a rebuild produces a report of what moved rather than a pattern that silently stops matching. [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) covers it.
 
-**Native shapes, replayed values.** The sandbox installs its browser surface as real V8 bindings, so accessors are native functions, wrong receivers throw `Illegal invocation`, and `Function.prototype.toString` is never patched. A surface written in JavaScript has to patch `toString` to hide itself, and that patch is more detectable than the thing it hides. The values come from `profiles/`, one file per real device captured with `wre sandbox capture`; nothing is generated. [docs/SANDBOX.md](docs/SANDBOX.md) covers it.
+**Native shapes, replayed values.** The sandbox installs its browser surface as real V8 bindings, so accessors are native functions and wrong receivers throw `Illegal invocation`. The document, timers and events sit on top of that, and the functions they add report as native through a V8-level `toString`, which is a narrower lie than a JavaScript patch over the whole surface. The values come from `profiles/`, one file per real device captured with `wre sandbox capture`; nothing is generated. [docs/SANDBOX.md](docs/SANDBOX.md) covers it.
 
 **Attribute many facts in few runs.** Testing 64 automation markers one at a time is 64 page loads. A pooled design plants them in groups so that each marker sits in a unique combination of runs, which takes 7. A pooled verdict is then confirmed by planting that one marker alone, because two markers together can produce the pattern of a third.
 

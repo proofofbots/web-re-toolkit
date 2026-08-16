@@ -62,7 +62,15 @@ The page also has a **Download JSON** button for a browser that cannot reach the
 wre sandbox import ~/Downloads/sandbox-profile.json --id pixel-8-chrome
 ```
 
-What the page reads: the `Navigator`, `Screen` and `Window` properties the sandbox installs, the plugin list, WebGL parameters and extensions from a real `webgl` context, `canPlayType` answers for twelve media types, sixteen media queries, twelve permission states, canvas and WebGL render hashes, `measureText` widths for twenty font families at `72px mmmmmmmmmmlli`, a handful of layout measurements, and the full `Object.getOwnPropertyNames(window)` order.
+`--open` skips the manual step: it launches Chrome through `wre-cdp`, opens the page itself and stores what comes back.
+
+```
+wre sandbox capture --open --label "MacBook Pro M3, Chrome 151"
+```
+
+The page reads: the `Navigator`, `Screen` and `Window` properties the sandbox installs, `navigator.userAgentData` including the high entropy values, `navigator.connection`, the plugin and MIME type lists, WebGL and WebGL2 parameters and extensions from real contexts, `canPlayType` answers for sixteen media types, twenty media queries, twenty five permission states including the names Chrome rejects as invalid, five canvas drawings kept as their real data URLs, a WebGL render, the `AudioContext` numbers and an `OfflineAudioContext` render hash, `getBattery`, the speech synthesis voices, `enumerateDevices`, `performance.memory`, the resolved `Intl` options and timezone offset, `screen.orientation`, the shape of `window.chrome`, the constant `document` properties, `measureText` widths for twenty font families at `72px mmmmmmmmmmlli`, a handful of layout measurements, and the full `Object.getOwnPropertyNames(window)` order.
+
+Canvas images are stored under a digest of the drawing operations that produced them, so a target that replays a known probe gets that device's real pixels back and anything else falls through to `default` and records a miss.
 
 ## What a capture is checked against
 
@@ -72,7 +80,7 @@ The audit never refuses a capture. It prints what it found and writes the file, 
 
 ## What the shapes get right
 
-**`Function.prototype.toString` is never patched.** Nothing in the install touches it, and `wre sandbox check` asserts that it still reports native and is still writable.
+**`Function.prototype.toString` is untouched by the install.** Nothing in `install` replaces it, and `wre sandbox check` asserts that it still reports native and is still writable. Mounting a page does replace it with a native equivalent, covered below.
 
 **Accessors are accessors.** `Object.getOwnPropertyDescriptor(Navigator.prototype, 'userAgent')` returns a descriptor with a native `get`, no `set`, and no `value`, which is what Chrome returns. A surface built by assigning plain values would return a data descriptor instead, and the difference is one property read away.
 
@@ -124,8 +132,35 @@ for miss in sandbox.misses() {
 
 Misses are the honest part of the design. A surface that quietly invents an answer produces a payload that looks complete and grades badly for reasons you cannot see. `wre grade` and the miss log are meant to be read together.
 
-## What is not there
+## The page
 
-The DOM. There is no `Document`, no elements, no CSSOM, no layout. A target that builds an element and measures it will not run. The profile carries `layout`, `canvas` and `font_widths` maps, and the capture page fills them, but nothing reads them yet.
+`wre_sandbox::browser::open` mounts a document on top of the installed profile and hands back a `Browser`:
 
-The audio fingerprint surface is absent.
+```rust
+let page = Page::read(url, html).with_epoch(now_ms());
+let mut browser = open(&profile, &page, hooks, RealmOptions::default())?;
+
+browser.charge_on("bmak", "startTs", 25.0)?;
+browser.run(&script, "target:sensor")?;
+browser.load()?;
+browser.play(stream.events())?;
+browser.advance(4_000.0)?;
+```
+
+`Page::read` takes the page's own HTML and pulls the script list, the title, the forms and every `input`, `textarea` and `select` with its attributes, label count and visibility, dropping `value`. A sensor that walks `document.getElementsByTagName("input")` finds the fields the page actually declares.
+
+What the document carries: `Node`, `Element`, `HTMLElement` and the element subclasses, a tree with the usual mutation methods, attributes, `classList`, `style`, a small selector engine behind `querySelector`, `getElementsByTagName` and `getElementsByClassName`, `getBoundingClientRect`, the event constructors (`Event`, `UIEvent`, `MouseEvent`, `PointerEvent`, `WheelEvent`, `KeyboardEvent`, `TouchEvent`, `Touch`, `CustomEvent`, `DeviceOrientationEvent`, `DeviceMotionEvent`, `ProgressEvent`, `MessageEvent`, `ErrorEvent`), working `EventTarget` methods, `Storage`, `Location`, `History`, `Crypto`, `Performance` with `timing`, `navigation` and `memory`, `XMLHttpRequest`, `fetch`, `Headers`, `Response`, `Blob`, `FormData`, `FileReader`, `TextEncoder`, `TextDecoder`, `URL`, `URLSearchParams`, the observers, `WebSocket`, `RTCPeerConnection`, `Worker`, `PushManager`, `XPathResult`, `AudioContext` and `OfflineAudioContext` answering from the profile, `speechSynthesis`, `Notification`, `Image`, `visualViewport`, `indexedDB` and `window.chrome`.
+
+Time is virtual. `Date`, `performance.now` and the timer queue all read one clock that starts at the epoch the page was opened with and moves when `advance(ms)` is called, plus however long the host has really spent. `charge_on(global, property, ms)` adds a one-off cost the first time a script writes a field, which is how the initialisation time a real browser spends before its first payload gets paid without pretending to do the work.
+
+Requests and cookies leave the realm through the host. `XMLHttpRequest`, `fetch` and `sendBeacon` hand a record to a `Transport`, which can answer offline or send the request for real, and every request is kept. `document.cookie` reads and writes a `CookieStore`, so a jar shared with the HTTP client keeps the page and the transport telling one story. HttpOnly cookies stay out of the script's view.
+
+Canvas is recorded, not drawn. A 2D context logs the operations it is given; `toDataURL` digests that log and asks the profile for the image that device produced for the same drawing. `measureText` scales the recorded font widths. Unknown drawings and unknown fonts record misses.
+
+## The source mask
+
+The DOM is JavaScript, which brings back the problem native accessors avoided: `document.createElement.toString()` would print its source. `Realm::install_source_mask` replaces `Function.prototype.toString` with a native V8 function, and `mask_sources(expression)` marks the members of an object as native behind a V8 private symbol. A marked function reports `function name() { [native code] }`; everything else, including the page's own functions, goes to the original implementation, so a script still reads its own source back verbatim.
+
+The replacement is itself a native function, so `Function.prototype.toString.toString()` reads native, and it stays writable and non-enumerable as in Chrome. This is a narrower lie than a JavaScript `toString` patch, not the absence of one: a script that compares `Function.prototype.toString` against a reference from another realm can still tell.
+
+The profile surface does not need it. Accessors installed from the profile are genuine V8 functions.
