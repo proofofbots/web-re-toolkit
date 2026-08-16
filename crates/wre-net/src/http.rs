@@ -6,6 +6,7 @@ use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 use wre_core::error::{Error, Result};
 
 use crate::emulate::Fingerprint;
+use crate::jar::Jar;
 use crate::proxy::ProxySpec;
 
 pub const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -19,6 +20,7 @@ pub struct ClientOptions {
     pub accept_invalid_certs: bool,
     pub http2_only: bool,
     pub cookies: bool,
+    pub jar: Option<Jar>,
     pub redirects: usize,
 }
 
@@ -32,6 +34,7 @@ impl Default for ClientOptions {
             accept_invalid_certs: false,
             http2_only: false,
             cookies: false,
+            jar: None,
             redirects: 10,
         }
     }
@@ -72,7 +75,7 @@ impl Client {
             .emulation(fingerprint)
             .timeout(options.timeout)
             .tls_cert_verification(!options.accept_invalid_certs)
-            .cookie_store(options.cookies)
+            .cookie_store(options.cookies || options.jar.is_some())
             .redirect(if options.redirects == 0 {
                 wreq::redirect::Policy::none()
             } else {
@@ -81,6 +84,10 @@ impl Client {
 
         if let Some(agent) = &options.user_agent {
             builder = builder.user_agent(agent.as_str());
+        }
+
+        if let Some(jar) = &options.jar {
+            builder = builder.cookie_provider(jar.store());
         }
 
         if options.http2_only {
@@ -126,6 +133,10 @@ impl Client {
 
     pub fn fingerprint(&self) -> Fingerprint {
         self.fingerprint
+    }
+
+    pub fn jar(&self) -> Option<&Jar> {
+        self.options.jar.as_ref()
     }
 
     /// The `User-Agent` this client sends unless a request overrides it.
