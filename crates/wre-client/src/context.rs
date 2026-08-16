@@ -11,6 +11,7 @@ use wre_net::proxy::ProxySpec;
 
 pub use wre_net::emulate::{Fingerprint, Platform, Profile};
 pub use wre_net::http::{FetchRequest, FetchResponse};
+pub use wre_net::jar::{Cookie, Jar};
 pub use wre_net::proxy::ProxyScheme;
 
 use wre_net::http::{Client as HttpClient, ClientOptions};
@@ -169,6 +170,7 @@ impl Services {
         }
         built.http2_only = options.http2_only;
         built.redirects = options.redirects;
+        built.jar = options.jar.clone();
 
         let client = HttpClient::new(built)
             .map_err(|error| ClientError::resource(format!("http client failed: {error}")))?;
@@ -188,6 +190,7 @@ pub struct HttpOptions {
     pub timeout_secs: Option<u64>,
     pub http2_only: bool,
     pub redirects: usize,
+    pub jar: Option<Jar>,
 }
 
 impl HttpOptions {
@@ -200,15 +203,21 @@ impl HttpOptions {
         self
     }
 
+    pub fn keeping(mut self, jar: Jar) -> Self {
+        self.jar = Some(jar);
+        self
+    }
+
     fn key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             self.proxy.as_deref().unwrap_or("direct"),
             self.fingerprint.as_deref().unwrap_or("auto"),
             self.user_agent.as_deref().unwrap_or("default"),
             self.timeout_secs.unwrap_or(30),
             self.http2_only,
-            self.redirects
+            self.redirects,
+            self.jar.as_ref().map(Jar::id).unwrap_or("no-jar")
         )
     }
 }

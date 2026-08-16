@@ -9,8 +9,8 @@ pub mod spec;
 
 pub use client::{Client, Registration, Registry, prepare, prepare_params};
 pub use context::{
-    Call, Clock, Counters, Ctx, DroppedEvents, EventSink, Fingerprint, Http, HttpOptions,
-    MetricSink, Platform, Profile, Services,
+    Call, Clock, Cookie, Counters, Ctx, DroppedEvents, EventSink, Fingerprint, Http, HttpOptions,
+    Jar, MetricSink, Platform, Profile, Services,
 };
 pub use diag::{DiagConfig, DiagMode, Recorder, Report};
 pub use error::{ClientError, ClientResult, ErrorKind};
