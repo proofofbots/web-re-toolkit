@@ -4,6 +4,6 @@ pub mod realm;
 
 pub use mount::{Mount, MountPlan, SourcePatch, apply_patches, mount};
 pub use realm::{
-    AccessRecord, BRAND_KEY, CallRecord, ConsoleLine, ErrorRecord, FunctionHandle, HostFn,
-    MountReport, Realm, RealmOptions, Records, initialize,
+    AccessRecord, BRAND_KEY, CallRecord, ConsoleLine, Control, ErrorRecord, FunctionHandle, HostFn,
+    MountReport, NATIVE_KEY, Realm, RealmOptions, Records, initialize,
 };

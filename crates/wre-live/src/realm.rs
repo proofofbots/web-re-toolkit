@@ -115,6 +115,7 @@ impl<'a> HostSpec<'a> {
 
 pub const BRAND_KEY: &str = "wre.brand";
 pub const STATE_KEY: &str = "wre.state";
+pub const NATIVE_KEY: &str = "wre.native";
 
 #[derive(Debug, Clone)]
 pub struct RealmOptions {
@@ -194,6 +195,16 @@ impl FunctionHandle {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Control {
+    pub name: String,
+    slot: usize,
+}
+
+struct SourceMask {
+    original: v8::Global<v8::Function>,
+}
+
 pub struct Realm {
     isolate: v8::OwnedIsolate,
     context: v8::Global<v8::Context>,
@@ -201,6 +212,8 @@ pub struct Realm {
     hosts: Vec<Arc<HostEntry>>,
     options: RealmOptions,
     control: Option<v8::Global<v8::Object>>,
+    controls: Vec<v8::Global<v8::Object>>,
+    masks: Vec<Arc<SourceMask>>,
 }
 
 pub fn fresh_name() -> String {
@@ -255,6 +268,8 @@ impl Realm {
             hosts: Vec::new(),
             options,
             control: None,
+            controls: Vec::new(),
+            masks: Vec::new(),
         };
 
         realm.run_prelude()?;
@@ -414,11 +429,21 @@ impl Realm {
         holder: Option<&str>,
         args: &[Value],
     ) -> Result<Value> {
-        let _entered = self.enter();
         let Some(control) = self.control.clone() else {
             return Err(Error::msg("this realm carries no instrumentation"));
         };
 
+        self.invoke_on(control, method, holder, args)
+    }
+
+    fn invoke_on(
+        &mut self,
+        control: v8::Global<v8::Object>,
+        method: &str,
+        holder: Option<&str>,
+        args: &[Value],
+    ) -> Result<Value> {
+        let _entered = self.enter();
         let context = self.context.clone();
         let guard = self.guard();
 
@@ -724,6 +749,165 @@ impl Realm {
         Ok(())
     }
 
+    pub fn attach(&mut self, source: &str, name: &str) -> Result<Control> {
+        let object = self.eval_object(source, name)?;
+        self.controls.push(object);
+
+        Ok(Control { name: name.to_string(), slot: self.controls.len() - 1 })
+    }
+
+    pub fn invoke(&mut self, control: &Control, method: &str, args: &[Value]) -> Result<Value> {
+        let Some(object) = self.controls.get(control.slot).cloned() else {
+            return Err(Error::msg(format!("{} is not attached to this realm", control.name)));
+        };
+
+        self.invoke_on(object, method, None, args)
+    }
+
+    pub fn install_source_mask(&mut self) -> Result<()> {
+        let _entered = self.enter();
+        let context = self.context.clone();
+
+        let original = {
+            v8::scope_with_context!(let scope, &mut self.isolate, &context);
+            v8::tc_scope!(let tc, scope);
+
+            let Some(source) = v8::String::new(tc, "Function.prototype.toString") else {
+                return Err(Error::msg("the source mask expression is not usable"));
+            };
+
+            let Some(script) = v8::Script::compile(tc, source, None) else {
+                return Err(Error::msg("the source mask expression did not compile"));
+            };
+
+            let Some(value) = script.run(tc) else {
+                return Err(Error::msg("Function.prototype.toString did not resolve"));
+            };
+
+            let Ok(function) = v8::Local::<v8::Function>::try_from(value) else {
+                return Err(Error::msg("Function.prototype.toString is not a function"));
+            };
+
+            v8::Global::new(tc, function)
+        };
+
+        let entry = Arc::new(SourceMask { original });
+        let pointer = Arc::as_ptr(&entry) as *mut std::ffi::c_void;
+        self.masks.push(Arc::clone(&entry));
+
+        v8::scope_with_context!(let scope, &mut self.isolate, &context);
+        v8::tc_scope!(let tc, scope);
+
+        let external = v8::External::new(tc, pointer);
+        let Some(replacement) = v8::Function::builder(source_mask_trampoline)
+            .data(external.into())
+            .length(0)
+            .build(tc)
+        else {
+            return Err(Error::msg("could not build the source mask"));
+        };
+
+        if let Some(text) = v8::String::new(tc, "toString") {
+            replacement.set_name(text);
+        }
+
+        let Some(source) = v8::String::new(tc, "Function.prototype") else {
+            return Err(Error::msg("Function.prototype is not reachable"));
+        };
+
+        let Some(script) = v8::Script::compile(tc, source, None) else {
+            return Err(Error::msg("Function.prototype did not compile"));
+        };
+
+        let Some(value) = script.run(tc) else {
+            return Err(Error::msg("Function.prototype did not resolve"));
+        };
+
+        let Ok(prototype) = v8::Local::<v8::Object>::try_from(value) else {
+            return Err(Error::msg("Function.prototype is not an object"));
+        };
+
+        let Some(key) = v8::String::new(tc, "toString") else {
+            return Err(Error::msg("toString is not usable as a key"));
+        };
+
+        prototype.set(tc, key.into(), replacement.into());
+        Ok(())
+    }
+
+    pub fn mask_source(&mut self, expression: &str) -> Result<()> {
+        let _entered = self.enter();
+        let context = self.context.clone();
+        v8::scope_with_context!(let scope, &mut self.isolate, &context);
+        v8::tc_scope!(let tc, scope);
+
+        let value = resolve(tc, expression)?;
+
+        let Ok(function) = v8::Local::<v8::Function>::try_from(value) else {
+            return Err(Error::msg(format!("{expression} is not a function")));
+        };
+
+        if !mark_native(tc, function.into()) {
+            return Err(Error::msg(format!("{expression} could not be marked")));
+        }
+
+        Ok(())
+    }
+
+    pub fn mask_sources(&mut self, expression: &str) -> Result<usize> {
+        let _entered = self.enter();
+        let context = self.context.clone();
+        v8::scope_with_context!(let scope, &mut self.isolate, &context);
+        v8::tc_scope!(let tc, scope);
+
+        let value = resolve(tc, expression)?;
+
+        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+            return Err(Error::msg(format!("{expression} is not an object")));
+        };
+
+        let Some(names) = object.get_own_property_names(tc, v8::GetPropertyNamesArgs::default())
+        else {
+            return Ok(0);
+        };
+
+        let mut masked = 0;
+
+        for index in 0..names.length() {
+            let Some(key) = names.get_index(tc, index) else {
+                continue;
+            };
+
+            let Ok(name) = v8::Local::<v8::Name>::try_from(key) else {
+                continue;
+            };
+
+            let Some(descriptor) = object.get_own_property_descriptor(tc, name) else {
+                continue;
+            };
+
+            let Ok(descriptor) = v8::Local::<v8::Object>::try_from(descriptor) else {
+                continue;
+            };
+
+            for slot in ["value", "get", "set"] {
+                let Some(field) = v8::String::new(tc, slot) else {
+                    continue;
+                };
+
+                let Some(found) = descriptor.get(tc, field.into()) else {
+                    continue;
+                };
+
+                if found.is_function() && mark_native(tc, found) {
+                    masked += 1;
+                }
+            }
+        }
+
+        Ok(masked)
+    }
+
     pub fn records(&mut self) -> Result<Records> {
         let raw = self.control_invoke("drain", None, &[])?;
         Ok(parse_records(&raw))
@@ -837,6 +1021,73 @@ fn host_trampoline(
             }
         }
     }
+}
+
+fn source_mask_trampoline(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut out: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(external) = v8::Local::<v8::External>::try_from(args.data()) else {
+        return;
+    };
+
+    let entry = unsafe { &*(external.value() as *const SourceMask) };
+    let receiver = args.this();
+
+    if let Some(private) = private_key(scope, NATIVE_KEY)
+        && let Some(found) = receiver.get_private(scope, private)
+        && !found.is_undefined()
+    {
+        let name = v8::String::new(scope, "name")
+            .and_then(|key| receiver.get(scope, key.into()))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+
+        let text = format!("function {name}() {{ [native code] }}");
+
+        if let Some(rendered) = v8::String::new(scope, &text) {
+            out.set(rendered.into());
+        }
+        return;
+    }
+
+    let original = v8::Local::new(scope, &entry.original);
+
+    if let Some(value) = original.call(scope, receiver.into(), &[]) {
+        out.set(value);
+    }
+}
+
+fn resolve<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    expression: &str,
+) -> Result<v8::Local<'s, v8::Value>> {
+    let Some(source) = v8::String::new(scope, expression) else {
+        return Err(Error::msg(format!("expression {expression} is not usable")));
+    };
+
+    let Some(script) = v8::Script::compile(scope, source, None) else {
+        return Err(Error::msg(format!("expression {expression} did not compile")));
+    };
+
+    script
+        .run(scope)
+        .ok_or_else(|| Error::msg(format!("expression {expression} did not run")))
+}
+
+fn mark_native(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> bool {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return false;
+    };
+
+    let Some(private) = private_key(scope, NATIVE_KEY) else {
+        return false;
+    };
+
+    let marker: v8::Local<v8::Value> = v8::Boolean::new(scope, true).into();
+    object.set_private(scope, private, marker);
+    true
 }
 
 fn private_key<'s>(scope: &mut v8::PinScope<'s, '_>, name: &str) -> Option<v8::Local<'s, v8::Private>> {
