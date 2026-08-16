@@ -1,4 +1,7 @@
-# Finding things again after a rebuild
+---
+title: Finding things again after a rebuild
+description: Locate a protection script's roles by structure and behaviour, lock them to one build, and diff the next build against that lock.
+---
 
 A protection script is rebuilt often. Identifiers are regenerated, the opcode table is permuted, output slots are shuffled, and the whole bundle is minified from scratch. Anything that locates code by matching the text of that build stops working the next time the vendor ships, and it stops working silently: a regex that no longer matches looks exactly like a target that no longer has the function.
 

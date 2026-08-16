@@ -1,4 +1,7 @@
-# The sidecar protocol
+---
+title: The sidecar protocol
+description: The framing, envelopes, handshake and op schema that every language binding uses to talk to the wred host binary.
+---
 
 Headless clients are written once in Rust and compiled into one host binary, `wred`. Every language package talks to that binary over a pipe.
 

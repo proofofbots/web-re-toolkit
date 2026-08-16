@@ -1,6 +1,6 @@
 # @proofofbot/runtime
 
-Node.js client for the [wre sidecar protocol](https://github.com/proofofbots/web-re-toolkit/blob/main/docs/PROTOCOL.md). It spawns the `wred` binary, speaks the length-prefixed frame protocol over its stdin and stdout, and gives you a `Sidecar` for base ops plus `Session` objects for target ops.
+Node.js client for the [wre sidecar protocol](https://proofofbots.github.io/web-re-toolkit/reference/protocol/). It spawns the `wred` binary, speaks the length-prefixed frame protocol over its stdin and stdout, and gives you a `Sidecar` for base ops plus `Session` objects for target ops.
 
 Generated client packages depend on this one. Use it directly when you want to drive a binary that has no generated package, or several targets from one process.
 

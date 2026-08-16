@@ -1,4 +1,7 @@
-# The Akamai client
+---
+title: The Akamai client
+description: Warm an Akamai Bot Manager session without a browser and carry its cookies into your own requests.
+---
 
 `clients/akamai` warms an Akamai Bot Manager session without a browser and then carries it: it fetches the page, finds the sensor script the page names, runs that script unmodified inside a `wre-live` realm with the `wre-sandbox` browser surface, posts what the script builds, and hands the session's cookies to whatever request you want to make next.
 

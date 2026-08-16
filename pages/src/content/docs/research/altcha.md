@@ -1,4 +1,7 @@
-# ALTCHA
+---
+title: ALTCHA
+description: How ALTCHA's proof of work is derived, what the v1 and v3 formats carry, and where the solve cost actually lands.
+---
 
 ALTCHA is an open source captcha widget (MIT) that replaces the "click the traffic lights" interaction with a proof of work the browser computes. The server issues a signed challenge, the widget brute forces a counter until a derived key starts with a published prefix, and the form carries the answer as a base64 JSON field. This note describes v3.2.1 of `altcha-org/altcha`, the format it still accepts from v1 deployments, and what all of that means for a headless client.
 

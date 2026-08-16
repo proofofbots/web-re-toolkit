@@ -1,6 +1,6 @@
 # wre
 
-Go client for the [wre sidecar protocol](https://github.com/proofofbots/web-re-toolkit/blob/main/docs/PROTOCOL.md). It spawns a `wred` binary, speaks the length-prefixed frame protocol over its stdin and stdout, and exposes sessions and ops as typed Go calls.
+Go client for the [wre sidecar protocol](https://proofofbots.github.io/web-re-toolkit/reference/protocol/). It spawns a `wred` binary, speaks the length-prefixed frame protocol over its stdin and stdout, and exposes sessions and ops as typed Go calls.
 
 Generated client packages depend on this one. Use it directly to drive a binary that has no generated package, or several targets from one process.
 

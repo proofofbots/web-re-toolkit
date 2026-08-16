@@ -1,0 +1,47 @@
+---
+title: web-re-toolkit
+description: A Rust toolkit for reverse engineering client-side web protections, and the headless clients built with it for npm, PyPI, Go and crates.io.
+template: splash
+hero:
+  tagline: Record a browser run, open the shipped script, borrow its own primitives, lift its virtual machine, and attribute wire fields to the environment facts that move them.
+  actions:
+    - text: Install
+      link: /web-re-toolkit/start/install/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/proofofbots/web-re-toolkit
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What it does
+
+`wre` drives Chrome, records the run into a capture bundle, and gives you the script the page loaded. From there you deobfuscate it, mount it in a V8 realm and call its functions as handles, probe its virtual machine handler by handler, and diff its payloads by address.
+
+Everything target-specific lives in one TOML manifest. Everything else is shared library code across 24 crates.
+
+<CardGrid>
+  <Card title="Borrow, do not reimplement" icon="puzzle">
+    The vendor's script already computes the payload correctly. Mount it and call it, so your decoder cannot drift from the build.
+  </Card>
+  <Card title="Identity survives a rebuild" icon="approve-check">
+    Roles are located by structural shape, magic constants and behaviour, then locked. The next build produces a diff, not a silent miss.
+  </Card>
+  <Card title="Native shapes, real values" icon="laptop">
+    The sandbox installs its browser surface as V8 bindings, so accessors are genuinely native. Values come from profiles captured off real devices.
+  </Card>
+  <Card title="Attribute many facts in few runs" icon="bars">
+    A pooled design tests 64 automation markers in 7 page loads, then confirms each verdict by planting that marker alone.
+  </Card>
+</CardGrid>
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Install" href="/web-re-toolkit/start/install/" description="Build the binary and point it at Chrome." />
+  <LinkCard title="A worked pass" href="/web-re-toolkit/start/first-pass/" description="Capture, deobfuscate, mount, lift, diff, verify." />
+  <LinkCard title="Headless clients" href="/web-re-toolkit/guides/clients/" description="Write a client in Rust, ship it to four languages." />
+  <LinkCard title="Packages" href="/web-re-toolkit/packages/" description="npm, PyPI, Go modules and crates for every shipped client." />
+</CardGrid>

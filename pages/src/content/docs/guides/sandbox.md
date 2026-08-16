@@ -1,4 +1,7 @@
-# The browser surface
+---
+title: The browser surface
+description: wre-sandbox installs a browser surface into a V8 realm as native bindings, with values captured from real devices.
+---
 
 `wre-sandbox` installs a browser surface into a `wre-live` realm. The values come from a profile captured off a real device. The object shapes come from V8 itself.
 

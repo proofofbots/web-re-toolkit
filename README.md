@@ -4,6 +4,8 @@ A Rust toolkit for reverse engineering client-side web protections. Record a bro
 
 Everything target-specific lives in one manifest. Everything else is shared library code.
 
+Documentation: https://proofofbots.github.io/web-re-toolkit/
+
 ## Install
 
 ```bash
@@ -119,24 +121,29 @@ wre client test --lang all
 
 A session owns the mounted realm and the cookies, so a caller opens one and reuses it. Each session records its calls and writes a single JSON report when a call fails. Read one back with `wre client diag <file>`. The report carries the mounted build tag, the script digest, the realm's console and error records, the call history, and the client's own `diagnostics` section, with credential-shaped values redacted.
 
-[docs/CLIENTS.md](docs/CLIENTS.md) is the authoring guide. [docs/PROTOCOL.md](docs/PROTOCOL.md) is the wire contract.
+[Headless clients](https://proofofbots.github.io/web-re-toolkit/guides/clients/) is the authoring guide. [The sidecar protocol](https://proofofbots.github.io/web-re-toolkit/reference/protocol/) is the wire contract.
+
+The generated node, python and go packages are listed under [Packages](https://proofofbots.github.io/web-re-toolkit/packages/).
 
 ## Documents
 
+Everything below lives on the [documentation site](https://proofofbots.github.io/web-re-toolkit/). The source is in `pages/src/content/docs`.
+
 | document | what it covers |
 | --- | --- |
-| [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) | locating a target's roles without depending on the text of one build, and reading the next one |
-| [docs/SANDBOX.md](docs/SANDBOX.md) | the browser surface, why it is native rather than JavaScript, and what it still does not have |
-| [docs/AKAMAI.md](docs/AKAMAI.md) | running a live Akamai sensor headlessly and carrying the session it produces |
-| [docs/CLIENTS.md](docs/CLIENTS.md) | writing a headless client |
-| [docs/PROTOCOL.md](docs/PROTOCOL.md) | the sidecar wire contract |
+| [Finding things again after a rebuild](https://proofofbots.github.io/web-re-toolkit/guides/identification/) | locating a target's roles without depending on the text of one build, and reading the next one |
+| [The browser surface](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) | why it is native rather than JavaScript, and what it still does not have |
+| [The Akamai client](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) | running a live Akamai sensor headlessly and carrying the session it produces |
+| [Headless clients](https://proofofbots.github.io/web-re-toolkit/guides/clients/) | writing a headless client |
+| [The sidecar protocol](https://proofofbots.github.io/web-re-toolkit/reference/protocol/) | the sidecar wire contract |
+| [Command reference](https://proofofbots.github.io/web-re-toolkit/reference/cli/) | every `wre` subcommand |
 
 ## Targets
 
 | target | adapter | client | research |
 | --- | --- | --- | --- |
-| akamai | any protected page | `clients/akamai` | [docs/AKAMAI.md](docs/AKAMAI.md) |
-| altcha | `targets/altcha.toml` | `clients/altcha` | [docs/research/altcha.md](docs/research/altcha.md) |
+| akamai | any protected page | `clients/akamai` | [akamai](https://proofofbots.github.io/web-re-toolkit/guides/akamai/) |
+| altcha | `targets/altcha.toml` | `clients/altcha` | [altcha](https://proofofbots.github.io/web-re-toolkit/research/altcha/) |
 | example | `targets/example.toml` | `clients/example` | a worked adapter, not a real service |
 
 ## Core ideas
@@ -156,9 +163,9 @@ params = 1
 
 **Snapshot the browser instead of writing DOM stubs.** `wre env snapshot` walks the real object graph into JSON. `wre env run` rebuilds it lazily inside a realm. Surfaces that cannot be faked in a headless realm route to a host bridge or a replay table.
 
-**Identity survives a rebuild.** Nothing important is found by matching the text of one build. A role is located by scoring several weak signals against a name blind normalisation of the AST: structural shape, magic constants, the property names it reaches, its position in the call graph, and where it matters, what it returns when you actually call it. The result is written to a lock file, and the next build is diffed against that lock, so a rebuild produces a report of what moved rather than a pattern that silently stops matching. [docs/IDENTIFICATION.md](docs/IDENTIFICATION.md) covers it.
+**Identity survives a rebuild.** Nothing important is found by matching the text of one build. A role is located by scoring several weak signals against a name blind normalisation of the AST: structural shape, magic constants, the property names it reaches, its position in the call graph, and where it matters, what it returns when you actually call it. The result is written to a lock file, and the next build is diffed against that lock, so a rebuild produces a report of what moved rather than a pattern that silently stops matching. [Finding things again after a rebuild](https://proofofbots.github.io/web-re-toolkit/guides/identification/) covers it.
 
-**Native shapes, replayed values.** The sandbox installs its browser surface as real V8 bindings, so accessors are native functions and wrong receivers throw `Illegal invocation`. The document, timers and events sit on top of that, and the functions they add report as native through a V8-level `toString`, which is a narrower lie than a JavaScript patch over the whole surface. The values come from `profiles/`, one file per real device captured with `wre sandbox capture`; nothing is generated. [docs/SANDBOX.md](docs/SANDBOX.md) covers it.
+**Native shapes, replayed values.** The sandbox installs its browser surface as real V8 bindings, so accessors are native functions and wrong receivers throw `Illegal invocation`. The document, timers and events sit on top of that, and the functions they add report as native through a V8-level `toString`, which is a narrower lie than a JavaScript patch over the whole surface. The values come from `profiles/`, one file per real device captured with `wre sandbox capture`; nothing is generated. [The browser surface](https://proofofbots.github.io/web-re-toolkit/guides/sandbox/) covers it.
 
 **Attribute many facts in few runs.** Testing 64 automation markers one at a time is 64 page loads. A pooled design plants them in groups so that each marker sits in a unique combination of runs, which takes 7. A pooled verdict is then confirmed by planting that one marker alone, because two markers together can produce the pattern of a third.
 
