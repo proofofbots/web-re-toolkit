@@ -71,7 +71,10 @@ fn package_json(plan: &Plan) -> String {
   "version": {version},
   "description": {description},
   "license": {license},
-  "repository": {repository},
+  "repository": {{
+    "type": "git",
+    "url": {repository}
+  }},
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
@@ -102,7 +105,7 @@ fn package_json(plan: &Plan) -> String {
             &format!("Headless client for {}", plan.client.id)
         )),
         license = json_string(&plan.config.license),
-        repository = json_string(&plan.config.repository),
+        repository = json_string(&git_repository_url(&plan.config.repository)),
         runtime_name = json_string(&format!("{}/runtime", plan.config.node_scope)),
         runtime_version = json_string(&plan.config.node_runtime),
     )
@@ -115,6 +118,10 @@ fn platform_package_json(plan: &Plan, tag: &str, os: &str, cpu: &str) -> String 
   "version": {version},
   "description": {description},
   "license": {license},
+  "repository": {{
+    "type": "git",
+    "url": {repository}
+  }},
   "os": ["{os}"],
   "cpu": ["{cpu}"],
   "files": ["bin"]
@@ -124,7 +131,19 @@ fn platform_package_json(plan: &Plan, tag: &str, os: &str, cpu: &str) -> String 
         version = json_string(&plan.config.version),
         description = json_string(&format!("wred binary for {tag}")),
         license = json_string(&plan.config.license),
+        repository = json_string(&git_repository_url(&plan.config.repository)),
     )
+}
+
+fn git_repository_url(repository: &str) -> String {
+    let trimmed = repository.trim_end_matches('/');
+    if trimmed.starts_with("git+") {
+        return trimmed.to_string();
+    }
+    if trimmed.ends_with(".git") {
+        return format!("git+{trimmed}");
+    }
+    format!("git+{trimmed}.git")
 }
 
 fn index_js(plan: &Plan) -> String {
