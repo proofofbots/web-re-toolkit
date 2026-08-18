@@ -1,7 +1,10 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use url::Url;
+use wreq::cookie::{CookieStore, Cookies};
+use wreq::header::HeaderValue;
+use wreq::{Uri, Version};
 
 use wre_core::error::{Error, Result};
 
@@ -21,6 +24,7 @@ pub struct Cookie {
 pub struct Jar {
     id: String,
     store: Arc<wreq::cookie::Jar>,
+    seen: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl std::fmt::Debug for Jar {
@@ -42,7 +46,11 @@ impl Default for Jar {
 impl Jar {
     pub fn new() -> Self {
         let id = format!("jar-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-        Self { id, store: Arc::new(wreq::cookie::Jar::default()) }
+        Self {
+            id,
+            store: Arc::new(wreq::cookie::Jar::default()),
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -55,8 +63,38 @@ impl Jar {
 
     pub fn add(&self, url: &str, line: &str) -> Result<()> {
         let parsed = Url::parse(url).map_err(|error| Error::msg(format!("{url}: {error}")))?;
+        self.note(line, parsed.path());
         self.store.add(line, parsed.as_str());
         Ok(())
+    }
+
+    fn note(&self, line: &str, request_path: &str) {
+        let head = line.split(';').next().unwrap_or_default();
+        let Some((name, _)) = head.split_once('=') else {
+            return;
+        };
+
+        let path = line
+            .split(';')
+            .skip(1)
+            .filter_map(|part| part.trim().split_once('='))
+            .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+            .map(|(_, value)| value.trim().to_string())
+            .unwrap_or_else(|| default_path(request_path));
+
+        let key = (name.trim().to_string(), path);
+
+        let mut seen = self.seen.lock().unwrap_or_else(|error| error.into_inner());
+        if !seen.contains(&key) {
+            seen.push(key);
+        }
+    }
+
+    fn place(&self, cookie: &Cookie) -> usize {
+        let seen = self.seen.lock().unwrap_or_else(|error| error.into_inner());
+        seen.iter()
+            .position(|(name, path)| *name == cookie.name && *path == cookie.path)
+            .unwrap_or(usize::MAX)
     }
 
     pub fn add_all(&self, url: &str, lines: &[&str]) -> Result<()> {
@@ -102,6 +140,7 @@ impl Jar {
                 .path
                 .len()
                 .cmp(&first.path.len())
+                .then_with(|| self.place(first).cmp(&self.place(second)))
                 .then_with(|| first.name.cmp(&second.name))
         });
 
@@ -142,6 +181,61 @@ impl Jar {
 
     pub fn clear(&self) {
         self.store.clear();
+        self.seen.lock().unwrap_or_else(|error| error.into_inner()).clear();
+    }
+}
+
+fn default_path(request_path: &str) -> String {
+    if !request_path.starts_with('/') {
+        return "/".to_string();
+    }
+
+    match request_path.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(at) => request_path[..at].to_string(),
+    }
+}
+
+impl CookieStore for Jar {
+    fn set_cookies(&self, cookie_headers: &mut dyn Iterator<Item = &HeaderValue>, uri: &Uri) {
+        let lines: Vec<String> = cookie_headers
+            .filter_map(|value| value.to_str().ok())
+            .map(str::to_string)
+            .collect();
+
+        for line in &lines {
+            self.note(line, uri.path());
+        }
+
+        let mut values: Vec<HeaderValue> = Vec::with_capacity(lines.len());
+        for line in &lines {
+            if let Ok(value) = HeaderValue::from_str(line) {
+                values.push(value);
+            }
+        }
+
+        self.store.set_cookies(&mut values.iter(), uri);
+    }
+
+    fn cookies(&self, uri: &Uri, version: Version) -> Cookies {
+        let matching = self.matching(&uri.to_string());
+
+        if matching.is_empty() {
+            return Cookies::Empty;
+        }
+
+        if matches!(version, Version::HTTP_2 | Version::HTTP_3) {
+            let values: Vec<HeaderValue> = matching
+                .iter()
+                .filter_map(|cookie| HeaderValue::from_str(&format!("{}={}", cookie.name, cookie.value)).ok())
+                .collect();
+
+            return Cookies::Uncompressed(values);
+        }
+
+        HeaderValue::from_str(&render(&matching))
+            .map(Cookies::Compressed)
+            .unwrap_or(Cookies::Empty)
     }
 }
 

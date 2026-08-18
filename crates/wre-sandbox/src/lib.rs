@@ -2,6 +2,7 @@ pub mod audit;
 pub mod browser;
 pub mod capture;
 pub mod graph;
+pub mod machine;
 pub mod host;
 pub mod install;
 pub mod library;

@@ -7,6 +7,8 @@ pub mod session;
 
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -15,6 +17,8 @@ use wre_client::context::{Call, Ctx, FetchRequest, HttpOptions, Jar};
 use wre_client::error::{ClientError, ClientResult};
 use wre_client::shape::{Shape, field};
 use wre_client::spec::{Capabilities, ClientDescriptor, Concurrency, OpSpec};
+use wre_sandbox::machine;
+use wre_sandbox::profile::Profile;
 use wre_sandbox::library::{BUILTIN_ID, Library, Record};
 
 use session::{Session, Settings};
@@ -37,7 +41,15 @@ A valid `_abck` is not a guarantee. The edge scores what the payload contains, a
 
 ## Profiles
 
-The sensor is fingerprinted against a browser, so the sandbox mounts a captured device profile. Without a workspace on disk the client falls back to the profile built into the binary. Capture your own with `wre sandbox capture`, list them with `wre sandbox list`, then name one in `profile`, or set `random_profile` to pick from the library per session. The transport fingerprint follows the profile's user agent unless `fingerprint` overrides it."#;
+The sensor is fingerprinted against a browser, so the sandbox mounts a captured device profile. Without a workspace on disk the client falls back to the profile built into the binary, which carries a whole browser surface and is served. Capture your own with `wre sandbox capture`, list them with `wre sandbox list`, then name one in `profile`, or set `random_profile` to pick from the library per session. A captured profile carries the canvas the machine renders and the boxes its pages lay out, which the built in one cannot. The transport fingerprint follows the profile's user agent unless `fingerprint` overrides it.
+
+`farble` perturbs what the profile renders, per session, the way a privacy browser does: the canvas comes back a pixel different, the audio render sums a fraction off and text measures on a scale of its own. The device the profile describes does not change. `run.rendered` names what a session rendered, so two of them can be told apart.
+
+## Time
+
+A session takes about two seconds, most of it round trips to the origin. The waits are ceilings on conditions rather than durations: `load_posts_ms` ends when the script's own load posts have been answered, `wait_ms` when the edge has validated the jar and the page has nothing left in flight. `warp` is how much faster the page's clock runs than the wall while those run, which is what keeps a script that reposts every few seconds from costing every one of them.
+
+Warming a session is the expensive part, and `request` on a warm one is a single round trip, so a hundred requests want one session rather than a hundred."#;
 
 pub fn registration() -> Registration {
     Registration { id: ID, describe, build }
@@ -97,6 +109,8 @@ pub fn describe() -> ClientDescriptor {
                             .summary("Script urls, the collection endpoint and the challenge page when there is one"),
                         field("cookies", Shape::Json)
                             .summary("Jar after the fetch, with _abck and sec_cpt broken out"),
+                        field("set_cookie", Shape::list(Shape::Str))
+                            .summary("Cookie names the navigation response set"),
                     ],
                 ),
             )
@@ -210,6 +224,9 @@ pub fn describe() -> ClientDescriptor {
                             .summary("Form encode these fields as the body"),
                         field("json", Shape::optional(Shape::Json))
                             .summary("Send this as a json body"),
+                        field("kind", Shape::optional(Shape::Str)).summary(
+                            "form sends it the way the page submits a form, otherwise it goes as an XHR",
+                        ),
                     ],
                 ),
                 Shape::object(
@@ -227,6 +244,36 @@ pub fn describe() -> ClientDescriptor {
                 ),
             )
             .summary("Send a request carrying the session this client warmed")
+            .deadline_ms(90_000),
+        )
+        .op(
+            OpSpec::new(
+                "relay",
+                Shape::object(
+                    "RelayInput",
+                    [
+                        field("url", Shape::Str),
+                        field("method", Shape::optional(Shape::Str)).summary("GET by default"),
+                        field("headers", Shape::optional(Shape::Json)).summary(
+                            "Name and value pairs sent verbatim, in this order, with nothing added",
+                        ),
+                        field("body_b64", Shape::optional(Shape::Str))
+                            .summary("Request body, base64"),
+                    ],
+                ),
+                Shape::object(
+                    "Relayed",
+                    [
+                        field("status", Shape::Int),
+                        field("url", Shape::Str).summary("Url after redirects"),
+                        field("headers", Shape::Json)
+                            .summary("Every response header, set-cookie included"),
+                        field("body_b64", Shape::Str).summary("Response body, base64"),
+                        field("cookies", Shape::Json).summary("Jar after the request"),
+                    ],
+                ),
+            )
+            .summary("Relay a request byte for byte through this session's transport and jar")
             .deadline_ms(90_000),
         )
         .op(
@@ -249,7 +296,11 @@ pub fn describe() -> ClientDescriptor {
         .op(
             OpSpec::new(
                 "cookies",
-                Shape::object("CookiesInput", []),
+                Shape::object(
+                    "CookiesInput",
+                    [field("set", Shape::optional(Shape::Str))
+                        .summary("A Cookie header to seed the jar with before reading it back")],
+                ),
                 Shape::object(
                     "Cookies",
                     [
@@ -312,6 +363,46 @@ pub fn describe() -> ClientDescriptor {
         )
         .op(
             OpSpec::new(
+                "script",
+                Shape::object("ScriptInput", []),
+                Shape::object(
+                    "Script",
+                    [
+                        field("url", Shape::Str).summary("Where the sensor script came from"),
+                        field("bytes", Shape::Int),
+                        field("source", Shape::Str)
+                            .summary("The exact body the sandbox ran, which the edge varies per fetch"),
+                    ],
+                ),
+            )
+            .summary("Hand back the sensor script this session actually ran"),
+        )
+        .op(
+            OpSpec::new(
+                "eval",
+                Shape::object(
+                    "EvalInput",
+                    [
+                        field("expression", Shape::Str)
+                            .summary("JavaScript evaluated in the mounted realm, result serialised as JSON"),
+                        field("nudge_ms", Shape::optional(Shape::Int))
+                            .summary("Advance the page clock this far before evaluating"),
+                    ],
+                ),
+                Shape::object(
+                    "Evaluated",
+                    [
+                        field("value", Shape::Json).summary("What the expression returned"),
+                        field("error", Shape::optional(Shape::Str))
+                            .summary("Set instead of value when the expression threw"),
+                    ],
+                ),
+            )
+            .summary("Evaluate an expression inside the sandbox the sensor is running in")
+            .deadline_ms(60_000),
+        )
+        .op(
+            OpSpec::new(
                 "reset",
                 Shape::object(
                     "ResetInput",
@@ -335,6 +426,11 @@ fn config_shape() -> Shape {
             field("random_profile", Shape::Bool)
                 .summary("Pick a captured profile at random")
                 .with_default(json!(false)),
+            field("random_machine", Shape::Bool)
+                .summary("Put every session on a different Mac: the chip, its core count and its \
+                          memory, picked together so they agree. What the machine renders is left \
+                          as captured, because two Macs running the same macOS draw the same canvas")
+                .with_default(json!(true)),
             field("proxy", Shape::optional(Shape::Str))
                 .summary("Proxy url the session and the sandbox both go through, http or socks5"),
             field("fingerprint", Shape::optional(Shape::Str))
@@ -342,27 +438,57 @@ fn config_shape() -> Shape {
             field("user_agent", Shape::optional(Shape::Str))
                 .summary("Overrides the user agent the sandbox profile carries"),
             field("wait_ms", Shape::Int)
-                .summary("Milliseconds to let the sensor run after load, spent in real time unless paced is off")
-                .with_default(json!(4_000)),
+                .summary("Ceiling on the wait after the input stream. It ends as soon as the edge \
+                          has validated the jar and the page has nothing left in flight, so a \
+                          session that is believed early pays none of it")
+                .with_default(json!(6_000)),
             field("init_cost_ms", Shape::Int)
                 .summary("Clock charge applied when the sensor writes bmak.startTs")
                 .with_default(json!(25)),
             field("friction_ms", Shape::Float)
                 .summary("Virtual cost of one DOM operation")
                 .with_default(json!(0.12)),
+            field("script_rate", Shape::Float)
+                .summary("How much of a script's own run time the page's clock counts. The \
+                          interpreter is slower than V8, so counting all of it puts the sensor's \
+                          own timings an order out")
+                .with_default(json!(0.07)),
             field("behaviour", Shape::Bool)
                 .summary("Play a pointer, click and key stream into the page")
-                .with_default(json!(true)),
-            field("paced", Shape::Bool)
-                .summary("Spend the wait in real time so the payload's clock matches the edge's")
                 .with_default(json!(true)),
             field("pixel", Shape::Bool)
                 .summary("Run the pixel challenge client when the page serves one")
                 .with_default(json!(true)),
+            field("keep_payloads", Shape::Bool)
+                .summary("Carry the sensor payload of every post in the answer, for diffing")
+                .with_default(json!(false)),
+            field("prelude", Shape::optional(Shape::Str))
+                .summary("Source run in the realm before the sensor script, for recorders"),
+            field("load_posts_ms", Shape::Float)
+                .summary("How long to let the script's own load-time posts land before input \
+                          starts")
+                .with_default(json!(4_000.0)),
+            field("warp", Shape::Float)
+                .summary("How much faster the page's clock runs than the wall while the session \
+                          waits. The scripts schedule their posts seconds apart and the edge reads \
+                          the payload, not the wall, so 1 spends every one of those seconds and 12 \
+                          spends a twelfth of them")
+                .with_default(json!(16.0)),
+            field("typed", Shape::Str)
+                .summary("Text typed into the page's first text field. Empty picks a short word \
+                          from the session seed")
+                .with_default(json!("")),
             field("live_xhr", Shape::Bool)
-                .summary("Let the sensor's own requests leave the sandbox. Off by default: the \
-                          host posts what the sandbox builds, which is one post per round rather \
-                          than every repost the script schedules")
+                .summary("Let the sensor's own requests leave the sandbox, which is what the \
+                          script does in a browser. Turning it off has the host post what the \
+                          sandbox builds instead, one payload per round, and the edge reads that \
+                          differently")
+                .with_default(json!(true)),
+            field("wire_pace", Shape::Bool)
+                .summary("Hold each live request until the wall clock reaches the time the \
+                          sandbox believes it is. The edge does not read a payload against when it \
+                          arrives, so this is off by default and a session finishes in the time \
+                          the work takes rather than the time the page would have spent")
                 .with_default(json!(false)),
             field("rounds", Shape::Int)
                 .summary("Payloads posted per solve")
@@ -390,6 +516,8 @@ struct Config {
     profile: Option<String>,
     #[serde(default)]
     random_profile: bool,
+    #[serde(default = "yes")]
+    random_machine: bool,
     #[serde(default)]
     proxy: Option<String>,
     #[serde(default)]
@@ -402,14 +530,26 @@ struct Config {
     init_cost_ms: f64,
     #[serde(default = "default_friction")]
     friction_ms: f64,
+    #[serde(default = "default_script_rate")]
+    script_rate: f64,
     #[serde(default = "yes")]
     behaviour: bool,
     #[serde(default = "yes")]
-    paced: bool,
-    #[serde(default = "yes")]
     pixel: bool,
-    #[serde(default)]
+    #[serde(default = "yes")]
     live_xhr: bool,
+    #[serde(default)]
+    wire_pace: bool,
+    #[serde(default)]
+    prelude: Option<String>,
+    #[serde(default = "default_load_posts")]
+    load_posts_ms: f64,
+    #[serde(default = "default_warp")]
+    warp: f64,
+    #[serde(default = "default_typed")]
+    typed: String,
+    #[serde(default)]
+    keep_payloads: bool,
     #[serde(default = "default_rounds")]
     rounds: usize,
     #[serde(default = "default_timeout")]
@@ -423,7 +563,7 @@ struct Config {
 }
 
 fn default_wait() -> u64 {
-    4_000
+    6_000
 }
 
 fn default_init_cost() -> f64 {
@@ -434,8 +574,24 @@ fn default_friction() -> f64 {
     0.12
 }
 
+fn default_script_rate() -> f64 {
+    0.07
+}
+
 fn yes() -> bool {
     true
+}
+
+fn default_load_posts() -> f64 {
+    4_000.0
+}
+
+fn default_warp() -> f64 {
+    16.0
+}
+
+fn default_typed() -> String {
+    String::new()
 }
 
 fn default_rounds() -> usize {
@@ -448,6 +604,13 @@ fn default_timeout() -> u64 {
 
 fn default_attempts() -> u64 {
     5_000_000
+}
+
+fn now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos() as u64)
+        .unwrap_or_default()
 }
 
 fn build(ctx: Ctx, config: Value) -> ClientResult<Box<dyn Client>> {
@@ -488,6 +651,7 @@ fn build(ctx: Ctx, config: Value) -> ClientResult<Box<dyn Client>> {
         jar: Jar::new(),
         session: None,
         last_run: Value::Null,
+        realms: 0,
     }))
 }
 
@@ -512,6 +676,7 @@ struct Akamai {
     jar: Jar,
     session: Option<Session>,
     last_run: Value,
+    realms: u64,
 }
 
 impl Akamai {
@@ -520,19 +685,45 @@ impl Akamai {
             wait_ms: self.config.wait_ms as f64,
             init_cost_ms: self.config.init_cost_ms,
             friction_ms: self.config.friction_ms,
+            script_rate: self.config.script_rate,
             behaviour: self.config.behaviour,
-            paced: self.config.paced,
             pixel: self.config.pixel,
             live_xhr: self.config.live_xhr,
+            wire_pace: self.config.wire_pace,
+            keep_payloads: self.config.keep_payloads,
             timeout_ms: self.config.timeout_ms,
             seed: self.config.seed.unwrap_or(0),
+            prelude: self.config.prelude.clone(),
+            load_posts_ms: self.config.load_posts_ms,
+            warp: self.config.warp,
+            typed: self.config.typed.clone(),
         }
     }
 
+    fn varied(&mut self) -> Profile {
+        let mut profile = self.record.profile.clone();
+
+        if !self.config.random_machine {
+            return profile;
+        }
+
+        self.realms += 1;
+
+        let seed = match self.config.seed {
+            Some(seed) => seed.wrapping_mul(0x9e37_79b9).wrapping_add(self.realms),
+            None => now_ns() ^ self.realms.wrapping_mul(0x2545_f491_4f6c_dd1d),
+        };
+
+        machine::vary(&mut profile, seed);
+        profile
+    }
+
     fn fresh(&mut self) -> ClientResult<Session> {
+        let profile = self.varied();
         let mut options = HttpOptions::with_proxy(self.config.proxy.as_deref());
         options.fingerprint = self.config.fingerprint.clone();
         options.user_agent = Some(self.user_agent.clone());
+        options.claim = session::claim_of(&profile, &self.user_agent);
         options.timeout_secs = Some(self.config.timeout_ms.div_ceil(1000).max(1));
         options.jar = Some(self.jar.clone());
 
@@ -541,7 +732,7 @@ impl Akamai {
         Ok(Session::new(
             http,
             self.jar.clone(),
-            self.record.profile.clone(),
+            profile,
             self.record.id.clone(),
             self.settings(),
             self.user_agent.clone(),
@@ -677,12 +868,20 @@ impl Client for Akamai {
                 let session = self.session()?;
                 let response = session.navigate(&url)?;
 
+                let set_cookie: Vec<String> = response
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+                    .map(|(_, value)| value.split('=').next().unwrap_or_default().to_string())
+                    .collect();
+
                 Ok(json!({
                     "url": session.page_url(),
                     "status": response.status,
                     "protected": session.surface().is_protected(),
                     "surface": session.surface(),
                     "cookies": session.cookies(),
+                    "set_cookie": set_cookie,
                 }))
             }
 
@@ -693,7 +892,10 @@ impl Client for Akamai {
                     .and_then(Value::as_u64)
                     .map(|value| value as usize)
                     .unwrap_or(self.config.rounds);
-                let post = params.get("post").and_then(Value::as_bool).unwrap_or(true);
+                let post = params
+                    .get("post")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(!self.config.live_xhr);
 
                 if let Some(wait) = params.get("wait_ms").and_then(Value::as_u64) {
                     self.config.wait_ms = wait;
@@ -843,9 +1045,14 @@ impl Client for Akamai {
                 };
 
                 let user_agent = self.user_agent.clone();
+                let languages = session::accept_language(&self.record.profile);
                 let session = self.session()?;
 
                 let header = if telemetry { session.telemetry()? } else { None };
+
+                let submitted = params.get("kind").and_then(Value::as_str) == Some("form");
+
+                let order = if submitted { &session::FORM_ORDER[..] } else { &session::XHR_ORDER[..] };
 
                 let mut request = FetchRequest {
                     url: url.clone(),
@@ -853,18 +1060,35 @@ impl Client for Akamai {
                     headers: Vec::new(),
                     body,
                     fingerprint: None,
+                    order: order.iter().map(|name| name.to_string()).collect(),
                 };
 
                 request = request
-                    .header("accept", "*/*")
-                    .header("accept-language", "en-US,en;q=0.9")
+                    .header("accept-language", languages)
                     .header("user-agent", user_agent);
+
+                if submitted {
+                    for (name, value) in session::FORM {
+                        request = request.header(name, value);
+                    }
+                } else {
+                    request = request.header("accept", "*/*");
+                }
 
                 if !session.page_url().is_empty() {
                     request = request.header("referer", session.page_url().to_string());
+
+                    if request.method != "GET" {
+                        if let Ok(parsed) = url::Url::parse(session.page_url()) {
+                            if let Some(host) = parsed.host_str() {
+                                let origin = format!("{}://{}", parsed.scheme(), host);
+                                request = request.header("origin", origin);
+                            }
+                        }
+                    }
                 }
 
-                if params.get("form").and_then(Value::as_object).is_some() {
+                if !submitted && params.get("form").and_then(Value::as_object).is_some() {
                     request = request.header("content-type", "application/x-www-form-urlencoded");
                 }
 
@@ -874,6 +1098,13 @@ impl Client for Akamai {
 
                 if let Some(found) = header {
                     request = request.header("akamai-bm-telemetry", found);
+                }
+
+                if !request.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("cookie")) {
+                    let cookies = session.jar().header(&url);
+                    if !cookies.is_empty() {
+                        request = request.header("cookie", cookies);
+                    }
                 }
 
                 if let Some(headers) = params.get("headers").and_then(Value::as_object) {
@@ -902,6 +1133,66 @@ impl Client for Akamai {
                 }))
             }
 
+            "relay" => {
+                let url = params
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| ClientError::bad_input("relay needs a url"))?;
+
+                let method = params
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or("GET")
+                    .to_uppercase();
+
+                let body = match params.get("body_b64").and_then(Value::as_str) {
+                    Some(encoded) if !encoded.is_empty() => Some(
+                        STANDARD.decode(encoded).map_err(|error| {
+                            ClientError::bad_input(format!("body_b64 is not base64: {error}"))
+                        })?,
+                    ),
+                    _ => None,
+                };
+
+                let mut headers = Vec::new();
+                if let Some(pairs) = params.get("headers").and_then(Value::as_array) {
+                    for pair in pairs {
+                        let Some(entry) = pair.as_array() else { continue };
+                        let (Some(name), Some(value)) =
+                            (entry.first().and_then(Value::as_str), entry.get(1).and_then(Value::as_str))
+                        else {
+                            continue;
+                        };
+                        headers.push((name.to_string(), value.to_string()));
+                    }
+                }
+
+                let order: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
+                let session = self.session()?;
+
+                let response = session.fetch(FetchRequest {
+                    url,
+                    method,
+                    headers,
+                    body,
+                    fingerprint: None,
+                    order,
+                })?;
+
+                Ok(json!({
+                    "status": response.status,
+                    "url": response.url,
+                    "headers": response
+                        .headers
+                        .iter()
+                        .map(|(name, value)| json!([name, value]))
+                        .collect::<Vec<_>>(),
+                    "body_b64": STANDARD.encode(&response.body),
+                    "cookies": session.cookies(),
+                }))
+            }
+
             "page" => {
                 let session = self.session()?;
                 let html = session.html().to_string();
@@ -915,6 +1206,18 @@ impl Client for Akamai {
             }
 
             "cookies" => {
+                if let Some(header) = params.get("set").and_then(Value::as_str) {
+                    let url = self.config.page_url.clone().unwrap_or_default();
+
+                    for pair in header.split(';') {
+                        let trimmed = pair.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        let _ = self.jar.add(&url, trimmed);
+                    }
+                }
+
                 let session = self.session()?;
                 let pairs = session.cookie_pairs();
 
@@ -991,6 +1294,32 @@ impl Client for Akamai {
             "pixel" => {
                 let session = self.open_session()?;
                 Ok(json!({ "pixel": session.run_pixel()? }))
+            }
+
+            "script" => {
+                let session = self.open_session()?;
+                let (url, source) = session.sensor_source();
+
+                Ok(json!({ "url": url, "bytes": source.len(), "source": source }))
+            }
+
+            "eval" => {
+                let expression = params
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ClientError::bad_input("eval needs an expression"))?
+                    .to_string();
+                let nudge = params.get("nudge_ms").and_then(Value::as_f64);
+
+                let session = self.open_session()?;
+                if let Some(ms) = nudge {
+                    session.nudge(ms)?;
+                }
+
+                match session.eval(&expression) {
+                    Ok(value) => Ok(json!({ "value": value })),
+                    Err(error) => Ok(json!({ "value": Value::Null, "error": error.to_string() })),
+                }
             }
 
             "reset" => {

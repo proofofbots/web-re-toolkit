@@ -135,13 +135,11 @@ impl ClientDescriptor {
         self
     }
 
-    /// Markdown that lands in every generated package README, under the quickstart.
     pub fn notes(mut self, text: impl Into<String>) -> Self {
         self.notes = text.into();
         self
     }
 
-    /// The op the generated examples call. Defaults to the first op that takes arguments.
     pub fn primary(mut self, op: impl Into<String>) -> Self {
         self.primary = Some(op.into());
         self

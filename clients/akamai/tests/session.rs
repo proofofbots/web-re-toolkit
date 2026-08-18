@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use base64::Engine;
 use serde_json::{Value, json};
 
 use wre_client::client::{Client, prepare, prepare_params};
@@ -12,6 +13,7 @@ use wre_client::context::{Ctx, Services};
 const SENSOR: &str = r##"
 (function () {
   var started = Date.now();
+  var own = document.currentScript;
   var seen = { moves: 0, keys: 0, clicks: 0 };
 
   var facts = [];
@@ -57,7 +59,7 @@ const SENSOR: &str = r##"
   note("title", document.title);
   note("href", location.href);
   note("scripts", document.scripts.length);
-  note("current", document.currentScript ? document.currentScript.src.slice(-8) : "none");
+  note("current", own ? own.src.slice(-8) : "none");
   note("native", document.createElement.toString().indexOf("[native code]") >= 0);
 
   var canvas = document.createElement("canvas");
@@ -108,7 +110,7 @@ const SENSOR: &str = r##"
 
   setTimeout(function () {
     var request = new XMLHttpRequest();
-    request.open("POST", document.currentScript ? document.currentScript.src : location.href);
+    request.open("POST", own ? own.src : location.href);
     request.setRequestHeader("Content-Type", "application/json");
     request.send(JSON.stringify({ sensor_data: payload() }));
     globalThis.posted = request.status;
@@ -353,6 +355,14 @@ fn the_client_runs_a_sensor_and_carries_the_session_it_produces() {
 
     let solved = call(&mut client, &descriptor, "solve", json!({}));
 
+    let telemetry = solved["telemetry"].as_str().expect("telemetry");
+    let built = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(telemetry.split("sensor_data=").nth(1).expect("sensor_data"))
+            .expect("base64"),
+    )
+    .expect("utf8");
+
     let payload = solved["payload"].as_str().expect("payload");
     assert!(payload.starts_with("7a74G7m23Vrp0o5c9at4"), "{payload}");
     assert!(payload.contains("cookie:true"), "{payload}");
@@ -360,10 +370,15 @@ fn the_client_runs_a_sensor_and_carries_the_session_it_produces() {
     assert!(payload.contains("native=true"), "{payload}");
     assert!(payload.contains("pt=true"), "{payload}");
     assert!(payload.contains("gpu=ANGLE (Apple"), "{payload}");
-    assert!(payload.contains("inputs=3"), "{payload}");
-    assert!(payload.contains("tz=Europe/London"), "{payload}");
+    assert!(payload.contains("inputs=0"), "{payload}");
+    let zone = wre_sandbox::profile::Profile::desktop_chrome()
+        .intl
+        .map(|intl| intl.time_zone)
+        .unwrap_or_default();
 
-    let moves = payload
+    assert!(payload.contains(&format!("tz={zone}")), "{payload}");
+
+    let moves = built
         .split("moves:")
         .nth(1)
         .and_then(|rest| rest.split(',').next())
@@ -371,10 +386,8 @@ fn the_client_runs_a_sensor_and_carries_the_session_it_produces() {
         .expect("moves");
     assert!(moves > 5, "the behaviour stream produced {moves} moves");
 
-    assert!(payload.contains("keys:2"), "{payload}");
-    assert!(payload.contains("clicks:1"), "{payload}");
-
-    let telemetry = solved["telemetry"].as_str().expect("telemetry");
+    assert!(built.contains("keys:4"), "{built}");
+    assert!(built.contains("clicks:1"), "{built}");
     assert!(telemetry.contains("sensor_data="));
     assert_eq!(solved["run"]["threw"], Value::Null);
     assert!(solved["run"]["misses"].as_array().unwrap().len() < 8, "{}", solved["run"]["misses"]);
@@ -436,10 +449,12 @@ fn a_fresh_payload_can_be_built_and_posted_on_demand() {
     let first = call(&mut client, &descriptor, "payload", json!({}));
     let second = call(&mut client, &descriptor, "payload", json!({ "nudge_ms": 2000 }));
 
-    let first = first["payload"].as_str().expect("first payload");
-    let second = second["payload"].as_str().expect("second payload");
-
-    assert_ne!(first, second, "two payloads from one session should not be identical");
+    assert_eq!(first["payload"], second["payload"]);
+    assert_ne!(
+        first["telemetry"].as_str().expect("first telemetry"),
+        second["telemetry"].as_str().expect("second telemetry"),
+        "two telemetry reads from one session should not be identical"
+    );
 
     let posted = call(&mut client, &descriptor, "post", json!({ "rounds": 1 }));
     assert_eq!(posted["posts"][0]["status"], 201);
@@ -484,6 +499,6 @@ fn the_client_reports_what_it_is_carrying() {
 
     assert_eq!(info["target"], "akamai");
     assert_eq!(info["profile"], "builtin-desktop-chrome");
-    assert!(info["user_agent"].as_str().unwrap().contains("Chrome/140"));
+    assert!(info["user_agent"].as_str().unwrap().contains("Chrome/151"));
     assert_eq!(info["open"], false);
 }

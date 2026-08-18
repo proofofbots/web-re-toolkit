@@ -51,9 +51,10 @@ impl Record {
 
         Self {
             id: BUILTIN_ID.to_string(),
-            label: "MacBook Pro M1 Pro, Chrome 140, built in".to_string(),
-            notes: "Compiled into wre-sandbox. Captured from a real machine, kept so the sandbox \
-                    runs before anyone has captured a profile of their own."
+            label: "MacBook Pro, Chrome 151, built in".to_string(),
+            notes: "Compiled into wre-sandbox from a real machine, so the sandbox runs before \
+                    anyone has captured a profile of their own. It carries no canvas and no page \
+                    layout, which is what a capture of your own adds."
                 .to_string(),
             captured_at: String::new(),
             origin: Origin { user_agent, ..Origin::default() },

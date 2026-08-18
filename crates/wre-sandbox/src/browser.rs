@@ -19,6 +19,10 @@ pub const BROWSER: &str = include_str!("../assets/browser.js");
 
 const BLANK_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
+const DRAIN_ROUNDS: usize = 64;
+const TIMER_STEPS: usize = 20000;
+const MIN_DRAIN_ROUNDS: usize = 6;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Request {
     pub method: String,
@@ -52,6 +56,8 @@ pub struct Answer {
     pub body: String,
     #[serde(default)]
     pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub paced: f64,
 }
 
 impl Answer {
@@ -69,12 +75,21 @@ impl Default for Answer {
             status: 201,
             body: r#"{"success":true}"#.to_string(),
             headers: Vec::new(),
+            paced: 0.0,
         }
     }
 }
 
 pub trait Transport: Send + Sync {
     fn send(&self, request: &Request) -> Answer;
+
+    fn start(&self, _request: &Request) -> Option<u64> {
+        None
+    }
+
+    fn take(&self, _ticket: u64) -> Option<Answer> {
+        None
+    }
 }
 
 pub trait CookieStore: Send + Sync {
@@ -160,6 +175,8 @@ pub struct Browser {
     sandbox: Sandbox,
     misses: Misses,
     requests: Arc<Mutex<Vec<Request>>>,
+    heap: Arc<Mutex<(u64, u64)>>,
+    screen: (f64, f64),
 }
 
 pub fn now_ms() -> f64 {
@@ -202,7 +219,17 @@ pub fn open(
         Box::new(move |_args| Ok(described.clone())),
     )?;
 
-    realm.register_host("__wreRealNow", Box::new(|_args| Ok(json!(now_ms()))))?;
+    realm.register_host(
+        "__wreRealNow",
+        Box::new(|_args| {
+            let precise = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
+                .unwrap_or_default();
+
+            Ok(json!(precise))
+        }),
+    )?;
 
     let transport = Arc::clone(&hooks.transport);
     let recorded = Arc::clone(&requests);
@@ -222,6 +249,44 @@ pub fn open(
             let answer = transport.send(&request);
             serde_json::to_value(answer)
                 .map_err(|error| Error::msg(format!("the answer did not serialise: {error}")))
+        }),
+    )?;
+
+    let transport = Arc::clone(&hooks.transport);
+    let recorded = Arc::clone(&requests);
+
+    realm.register_host(
+        "__wreRequestStart",
+        Box::new(move |args| {
+            let raw = args.first().cloned().unwrap_or(Value::Null);
+            let request: Request = serde_json::from_value(raw)
+                .map_err(|error| Error::msg(format!("the sandbox sent a bad request: {error}")))?;
+
+            let Some(ticket) = transport.start(&request) else {
+                return Ok(Value::Null);
+            };
+
+            {
+                let mut list = recorded.lock().unwrap_or_else(|error| error.into_inner());
+                list.push(request);
+            }
+
+            Ok(json!(ticket))
+        }),
+    )?;
+
+    let transport = Arc::clone(&hooks.transport);
+
+    realm.register_host(
+        "__wreRequestTake",
+        Box::new(move |args| {
+            let ticket = args.first().and_then(Value::as_u64).unwrap_or_default();
+
+            match transport.take(ticket) {
+                Some(answer) => serde_json::to_value(answer)
+                    .map_err(|error| Error::msg(format!("the answer did not serialise: {error}"))),
+                None => Ok(Value::Null),
+            }
         }),
     )?;
 
@@ -258,7 +323,15 @@ pub fn open(
                 return Ok(json!(found));
             }
 
-            watcher.record(&format!("canvas toDataURL({key})"));
+            let ops = args
+                .get(4)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(600)
+                .collect::<String>();
+
+            watcher.record(&format!("canvas toDataURL({key}) {ops}"));
 
             match images.get("default") {
                 Some(found) => Ok(json!(found)),
@@ -292,6 +365,17 @@ pub fn open(
         }),
     )?;
 
+    let heap = Arc::new(Mutex::new((0_u64, 0_u64)));
+    let reader = Arc::clone(&heap);
+
+    realm.register_host(
+        "__wreHeap",
+        Box::new(move |_args| {
+            let held = reader.lock().unwrap_or_else(|error| error.into_inner());
+            Ok(json!([held.0, held.1]))
+        }),
+    )?;
+
     crate::host::install(&mut realm)?;
 
     let control = realm.attach(BROWSER, "wre:browser")?;
@@ -307,13 +391,18 @@ pub fn open(
         }
     }
 
-    Ok(Browser {
+    let mut browser = Browser {
         realm,
         control,
         sandbox,
         misses,
         requests,
-    })
+        heap,
+        screen: screen_offset(profile),
+    };
+
+    browser.measure_heap();
+    Ok(browser)
 }
 
 fn measure(
@@ -407,6 +496,22 @@ impl Browser {
         self.misses.all()
     }
 
+    pub fn errors(&mut self) -> Vec<String> {
+        let records = match self.realm.records() {
+            Ok(found) => found,
+            Err(_) => return Vec::new(),
+        };
+
+        records
+            .errors
+            .into_iter()
+            .map(|entry| match entry.where_ {
+                Some(place) => format!("{place}: {}", entry.text),
+                None => entry.text,
+            })
+            .collect()
+    }
+
     pub fn requests(&self) -> Vec<Request> {
         let list = self
             .requests
@@ -423,16 +528,77 @@ impl Browser {
         self.realm.eval_json(expression)
     }
 
+    fn measure_heap(&mut self) {
+        let (total, used) = self.realm.heap();
+        let mut held = self.heap.lock().unwrap_or_else(|error| error.into_inner());
+        *held = (total as u64, used as u64);
+    }
+
     pub fn advance(&mut self, ms: f64) -> Result<usize> {
-        let ran = self.realm.invoke(&self.control, "advance", &[json!(ms)])?;
-        Ok(ran.as_u64().unwrap_or_default() as usize)
+        self.measure_heap();
+
+        let until = self
+            .realm
+            .invoke(&self.control, "horizon", &[json!(ms)])?
+            .as_f64()
+            .unwrap_or_default();
+
+        let mut total = 0;
+
+        for _ in 0..TIMER_STEPS {
+            self.realm.pump_microtasks();
+
+            let ran = self
+                .realm
+                .invoke(&self.control, "stepTo", &[json!(until)])?
+                .as_u64()
+                .unwrap_or_default() as usize;
+
+            if ran == 0 {
+                break;
+            }
+
+            total += ran;
+        }
+
+        self.realm.invoke(&self.control, "reach", &[json!(until)])?;
+        total += self.drain()?;
+        Ok(total)
     }
 
     pub fn settle(&mut self, rounds: usize) -> Result<usize> {
+        self.measure_heap();
+
         let ran = self
             .realm
             .invoke(&self.control, "settle", &[json!(rounds)])?;
-        Ok(ran.as_u64().unwrap_or_default() as usize)
+        let mut total = ran.as_u64().unwrap_or_default() as usize;
+        total += self.drain()?;
+        Ok(total)
+    }
+
+    fn drain(&mut self) -> Result<usize> {
+        let mut total = 0;
+        let mut quiet = 0;
+
+        for round in 0..DRAIN_ROUNDS {
+            self.realm.pump_microtasks();
+
+            let ran = self
+                .realm
+                .invoke(&self.control, "settle", &[json!(1)])?
+                .as_u64()
+                .unwrap_or_default() as usize;
+
+            total += ran;
+            quiet = if ran == 0 { quiet + 1 } else { 0 };
+
+            if round >= MIN_DRAIN_ROUNDS && quiet >= 2 {
+                break;
+            }
+        }
+
+        Ok(total)
     }
 
     pub fn fire(&mut self, kind: &str, detail: Value) -> Result<()> {
@@ -475,6 +641,16 @@ impl Browser {
         Ok(())
     }
 
+    pub fn running_script(&mut self, src: &str) -> Result<()> {
+        self.realm.invoke(&self.control, "runningScript", &[json!(src)])?;
+        Ok(())
+    }
+
+    pub fn rate(&mut self, factor: f64) -> Result<()> {
+        self.realm.invoke(&self.control, "rate", &[json!(factor)])?;
+        Ok(())
+    }
+
     pub fn friction(&mut self, ms: f64) -> Result<()> {
         self.realm.invoke(&self.control, "friction", &[json!(ms)])?;
         Ok(())
@@ -483,6 +659,11 @@ impl Browser {
     pub fn cookies(&mut self) -> Result<String> {
         let value = self.realm.invoke(&self.control, "cookies", &[])?;
         Ok(value.as_str().unwrap_or_default().to_string())
+    }
+
+    pub fn finish_parse(&mut self) -> Result<()> {
+        self.realm.invoke(&self.control, "parsed", &[])?;
+        Ok(())
     }
 
     pub fn load(&mut self) -> Result<()> {
@@ -494,17 +675,29 @@ impl Browser {
     }
 
     pub fn play(&mut self, events: &[Motion]) -> Result<usize> {
+        self.play_warped(events, f64::INFINITY)
+    }
+
+    pub fn play_warped(&mut self, events: &[Motion], warp: f64) -> Result<usize> {
         let mut clock = 0.0;
         let mut fired = 0;
 
         for event in events {
             let gap = event.at() - clock;
             if gap > 0.0 {
+                if warp.is_finite() && warp > 0.0 {
+                    let real = (gap / warp).min(2_000.0);
+                    if real >= 1.0 {
+                        std::thread::sleep(std::time::Duration::from_millis(real as u64));
+                        self.advance(0.0)?;
+                    }
+                }
+
                 self.advance(gap)?;
                 clock = event.at();
             }
 
-            for (kind, detail) in expand(event) {
+            for (kind, detail) in expand(event, self.screen) {
                 self.fire(&kind, detail)?;
                 fired += 1;
             }
@@ -514,7 +707,20 @@ impl Browser {
     }
 }
 
-fn expand(event: &Motion) -> Vec<(String, Value)> {
+fn screen_offset(profile: &Profile) -> (f64, f64) {
+    let read = |name: &str| {
+        profile
+            .property("Window", name)
+            .and_then(Value::as_f64)
+            .unwrap_or_default()
+    };
+
+    let chrome = (read("outerHeight") - read("innerHeight")).max(0.0);
+
+    (read("screenX"), read("screenY") + chrome)
+}
+
+fn expand(event: &Motion, screen: (f64, f64)) -> Vec<(String, Value)> {
     let point = event.position();
     let base = point
         .map(|point| {
@@ -523,8 +729,8 @@ fn expand(event: &Motion) -> Vec<(String, Value)> {
                 "clientY": point.y.round(),
                 "pageX": point.x.round(),
                 "pageY": point.y.round(),
-                "screenX": point.x.round(),
-                "screenY": (point.y + 74.0).round(),
+                "screenX": (point.x + screen.0).round(),
+                "screenY": (point.y + screen.1).round(),
             })
         })
         .unwrap_or_else(|| json!({}));
@@ -578,16 +784,38 @@ fn expand(event: &Motion) -> Vec<(String, Value)> {
         Motion::TouchStart { .. } => vec![("touchstart".to_string(), with(json!({})))],
         Motion::TouchMove { .. } => vec![("touchmove".to_string(), with(json!({})))],
         Motion::TouchEnd { .. } => vec![("touchend".to_string(), with(json!({})))],
-        Motion::KeyDown { key, .. } => vec![(
-            "keydown".to_string(),
-            json!({ "key": key, "code": code_for(key), "keyCode": key_code(key), "which": key_code(key) }),
-        )],
+        Motion::KeyDown { key, .. } => {
+            let mut out = vec![(
+                "keydown".to_string(),
+                json!({ "key": key, "code": code_for(key), "keyCode": key_code(key), "which": key_code(key) }),
+            )];
+
+            if let Some(character) = printable(key) {
+                out.push((
+                    "keypress".to_string(),
+                    json!({ "key": key, "code": code_for(key), "charCode": character }),
+                ));
+            }
+
+            out
+        }
         Motion::KeyUp { key, .. } => vec![(
             "keyup".to_string(),
             json!({ "key": key, "code": code_for(key), "keyCode": key_code(key), "which": key_code(key) }),
         )],
         Motion::Scroll { .. } => vec![("scroll".to_string(), json!({ "target": "window" }))],
     }
+}
+
+fn printable(key: &str) -> Option<u32> {
+    let mut characters = key.chars();
+    let first = characters.next()?;
+
+    if characters.next().is_some() {
+        return None;
+    }
+
+    Some(first as u32)
 }
 
 fn key_code(key: &str) -> u32 {

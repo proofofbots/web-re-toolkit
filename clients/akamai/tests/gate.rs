@@ -166,7 +166,9 @@ fn the_same_login_refuses_a_session_that_never_ran_the_sensor() {
 #[test]
 #[ignore = "reaches login.xero.com"]
 fn a_damaged_payload_is_refused_where_the_real_one_is_served() {
-    let mut driver = Driver::new(json!({ "page_url": PAGE, "wait_ms": 20_000, "rounds": 0 }));
+    let mut driver = Driver::new(
+        json!({ "page_url": PAGE, "wait_ms": 20_000, "rounds": 0, "live_xhr": false }),
+    );
 
     driver.call("solve", json!({ "post": false }));
     driver.call("post", json!({ "payload": "garbage", "rounds": 2 }));

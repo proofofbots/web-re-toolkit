@@ -181,6 +181,7 @@ impl Transport for Live {
                 status: 0,
                 body: String::new(),
                 headers: Vec::new(),
+                paced: 0.0,
             };
         };
 
@@ -211,6 +212,7 @@ impl Transport for Live {
                     status: 200,
                     body: r#"{"": ""}"#.to_string(),
                     headers: Vec::new(),
+                    paced: 0.0,
                 };
             }
         }
@@ -229,6 +231,7 @@ impl Transport for Live {
                 status: 0,
                 body: String::new(),
                 headers: Vec::new(),
+                paced: 0.0,
             };
         }
 
@@ -265,6 +268,7 @@ impl Transport for Live {
             headers: headers.into_iter().collect(),
             body,
             fingerprint: None,
+            order: Vec::new(),
         };
 
         let answer = match self.http.fetch(outgoing) {
@@ -277,11 +281,13 @@ impl Transport for Live {
                     .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie"))
                     .map(|(name, value)| (name.to_lowercase(), value.clone()))
                     .collect(),
+                paced: 0.0,
             },
             Err(_) => Answer {
                 status: 0,
                 body: String::new(),
                 headers: Vec::new(),
+                paced: 0.0,
             },
         };
 

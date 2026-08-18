@@ -187,9 +187,10 @@ pub fn install(realm: &mut Realm, profile: &Profile) -> Result<Sandbox> {
             let host = format!("__wre${}${}", interface.brand, name);
             let answer = value.clone();
 
-            realm.register_branded_host(
-                &host,
-                &interface.brand,
+            let display = format!("get {name}");
+
+            realm.register(
+                HostSpec::new(&host).called(&display).on_brand(&interface.brand),
                 Box::new(move |_args| Ok(answer.clone())),
             )?;
 
@@ -243,6 +244,14 @@ fn install_plugins(realm: &mut Realm, profile: &Profile) -> Result<()> {
 
   var list = Object.create(PluginArray.prototype);
 
+  // A named alias is what `navigator.plugins["PDF Viewer"]` reads. Two plugins can carry the same
+  // name, and a privacy browser that invents plugins gives its inventions an empty mime type, so
+  // the first alias wins rather than the second throwing and taking the whole surface with it.
+  var alias = function (owner, name, value) {{
+    if (!name || Object.prototype.hasOwnProperty.call(owner, name)) return;
+    Object.defineProperty(owner, name, {{ value: value, enumerable: false }});
+  }};
+
   var MimeType = __wreTag(function () {{ throw new TypeError("Illegal constructor"); }}, "MimeType");
 
   described.forEach(function (entry, index) {{
@@ -260,23 +269,27 @@ fn install_plugins(realm: &mut Realm, profile: &Profile) -> Result<()> {
       Object.defineProperty(type, "description", {{ value: entry.description, enumerable: true }});
       Object.defineProperty(type, "enabledPlugin", {{ value: plugin, enumerable: true }});
       Object.defineProperty(plugin, String(at), {{ value: type, enumerable: true }});
-      Object.defineProperty(plugin, name, {{ value: type, enumerable: false }});
+      alias(plugin, name, type);
     }});
 
     Object.defineProperty(plugin, "length", {{ value: types.length, enumerable: true }});
-    Plugin.prototype.item = function (at) {{ return this[at] || null; }};
+    Plugin.prototype.item = function (at) {{ return this[at >>> 0] || null; }};
     Plugin.prototype.namedItem = function (name) {{ return this[name] || null; }};
 
     Object.defineProperty(list, String(index), {{ value: plugin, enumerable: true }});
-    Object.defineProperty(list, entry.name, {{ value: plugin, enumerable: false }});
+    alias(list, entry.name, plugin);
   }});
 
   Object.defineProperty(list, "length", {{ value: described.length, enumerable: true }});
-  PluginArray.prototype.item = function (index) {{ return this[index] || null; }};
-  PluginArray.prototype.namedItem = function (name) {{ return this[name] || null; }};
+  PluginArray.prototype.item = function item(index) {{ return this[index >>> 0] || null; }};
+  PluginArray.prototype.namedItem = function namedItem(name) {{ return this[name] || null; }};
+  PluginArray.prototype.refresh = function refresh() {{}};
+
+  var read = function () {{ return list; }};
+  Object.defineProperty(read, "name", {{ value: "get plugins", configurable: true }});
 
   Object.defineProperty(Navigator.prototype, "plugins", {{
-    get: function () {{ return list; }},
+    get: read,
     enumerable: true,
     configurable: true
   }});
@@ -288,11 +301,53 @@ fn install_plugins(realm: &mut Realm, profile: &Profile) -> Result<()> {
 }
 
 fn install_webgl(realm: &mut Realm, profile: &Profile, misses: &Misses) -> Result<()> {
-    let parameters: BTreeMap<String, Value> = profile.webgl_parameters.clone();
+    install_webgl_context(
+        realm,
+        misses,
+        "WebGLRenderingContext",
+        "__wreWebglParameter",
+        "__wreWebglExtensions",
+        profile.webgl_parameters.clone(),
+        profile.webgl_extensions.clone(),
+    )?;
+
+    let parameters = if profile.webgl2_parameters.is_empty() {
+        profile.webgl_parameters.clone()
+    } else {
+        profile.webgl2_parameters.clone()
+    };
+
+    let extensions = if profile.webgl2_extensions.is_empty() {
+        profile.webgl_extensions.clone()
+    } else {
+        profile.webgl2_extensions.clone()
+    };
+
+    install_webgl_context(
+        realm,
+        misses,
+        "WebGL2RenderingContext",
+        "__wreWebgl2Parameter",
+        "__wreWebgl2Extensions",
+        parameters,
+        extensions,
+    )
+}
+
+fn install_webgl_context(
+    realm: &mut Realm,
+    misses: &Misses,
+    constructor: &str,
+    parameter_host: &str,
+    extension_host: &str,
+    parameters: BTreeMap<String, Value>,
+    extensions: Vec<String>,
+) -> Result<()> {
     let watcher = misses.clone();
+    let label = constructor.to_string();
 
     realm.register_host(
-        "__wreWebglParameter",
+        parameter_host,
         Box::new(move |args| {
             let key = args
                 .first()
@@ -302,80 +357,88 @@ fn install_webgl(realm: &mut Realm, profile: &Profile, misses: &Misses) -> Resul
             match parameters.get(&key) {
                 Some(value) => Ok(value.clone()),
                 None => {
-                    watcher.record(&format!("webgl getParameter({key})"));
+                    watcher.record(&format!("{label} getParameter({key})"));
                     Ok(Value::Null)
                 }
             }
         }),
     )?;
 
-    let extensions = profile.webgl_extensions.clone();
     realm.register_host(
-        "__wreWebglExtensions",
+        extension_host,
         Box::new(move |_args| Ok(json!(extensions))),
     )?;
 
     realm.eval_unit(
-        r#"
-(function () {
+        &format!(
+            r#"
+(function () {{
   var Ctx = __wreTag(
-    function () { throw new TypeError("Illegal constructor"); },
-    "WebGLRenderingContext"
+    function () {{ throw new TypeError("Illegal constructor"); }},
+    "{constructor}"
   );
 
-  Ctx.prototype.getParameter = __wreWebglParameter;
-  Ctx.prototype.getSupportedExtensions = __wreWebglExtensions;
-  Ctx.prototype.getExtension = function (name) {
+  Ctx.prototype.getParameter = {parameter_host};
+  Ctx.prototype.getSupportedExtensions = {extension_host};
+  Ctx.prototype.getExtension = function (name) {{
     var supported = this.getSupportedExtensions() || [];
     if (supported.indexOf(name) < 0) return null;
-    if (name === "WEBGL_debug_renderer_info") {
-      return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
-    }
-    return {};
-  };
+    if (name === "WEBGL_debug_renderer_info") {{
+      return {{ UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 }};
+    }}
+    return {{}};
+  }};
 
-  delete globalThis.__wreWebglParameter;
-  delete globalThis.__wreWebglExtensions;
-})();
-"#,
+  delete globalThis.{parameter_host};
+  delete globalThis.{extension_host};
+}})();
+"#
+        ),
         "wre:webgl",
     )
 }
 
 fn install_media(realm: &mut Realm, profile: &Profile, misses: &Misses) -> Result<()> {
-    let support = profile.media_support.clone();
     let watcher = misses.clone();
 
     realm.register_host(
-        "__wreCanPlayType",
+        "__wreCanPlayTypeMiss",
         Box::new(move |args| {
             let key = args
                 .first()
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-
-            match support.get(&key) {
-                Some(answer) => Ok(json!(answer)),
-                None => {
-                    watcher.record(&format!("canPlayType({key})"));
-                    Ok(json!(""))
-                }
-            }
+            watcher.record(&format!("canPlayType({key})"));
+            Ok(Value::Null)
         }),
     )?;
 
+    let support = json!(profile.media_support).to_string();
+
     realm.eval_unit(
-        r#"
-(function () {
+        &format!(
+            r#"
+(function () {{
+  var support = {support};
+  var miss = globalThis.__wreCanPlayTypeMiss;
+
   var Media = __wreTag(
-    function () { throw new TypeError("Illegal constructor"); },
+    function () {{ throw new TypeError("Illegal constructor"); }},
     "HTMLMediaElement"
   );
-  Media.prototype.canPlayType = __wreCanPlayType;
-  delete globalThis.__wreCanPlayType;
-})();
-"#,
+
+  Media.prototype.canPlayType = function canPlayType(type) {{
+    var key = String(type);
+    if (Object.prototype.hasOwnProperty.call(support, key)) return support[key];
+    miss(key);
+    return "";
+  }};
+
+  delete globalThis.__wreCanPlayTypeMiss;
+}})();
+"#
+        ),
         "wre:media",
     )
 }
@@ -480,6 +543,9 @@ __wreInterface("Permissions", "");
                 .to_string();
 
             match permissions.get(&key) {
+                Some(state) if state.starts_with("error:") => {
+                    Err(Error::msg(state.trim_start_matches("error:").to_string()))
+                }
                 Some(state) if state == "invalid" => Err(Error::msg(format!(
                     "Failed to execute 'query' on 'Permissions': Failed to read the 'name' \
                      property from 'PermissionDescriptor': The provided value '{key}' is not a \
@@ -488,7 +554,11 @@ __wreInterface("Permissions", "");
                 Some(state) => Ok(json!({ "name": key, "state": state })),
                 None => {
                     watcher.record(&format!("permissions.query({key})"));
-                    Ok(json!({ "name": key, "state": "prompt" }))
+                    Err(Error::msg(format!(
+                        "Failed to execute 'query' on 'Permissions': Failed to read the 'name' \
+                         property from 'PermissionDescriptor': The provided value '{key}' is not a \
+                         valid enum value of type PermissionName."
+                    )))
                 }
             }
         }),

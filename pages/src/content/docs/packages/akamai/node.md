@@ -32,88 +32,59 @@ One client owns one session, which owns the mounted realm and the cookie jar. Op
 
 ## A full run
 
-Warm a session against a protected login page, read the antiforgery token out of the page the session already loaded, and post a form through the same jar.
+Warm a session against a protected page, read the antiforgery token out of the page the session already loaded, and post the site's own search form through the same jar. This is the Lee County court records site, which is Akamai protected end to end: the search answers a session it does not believe with an access denied page or an adaptive challenge, and answers one it does with the case.
 
 ```js
 import { open } from "@proofofbot/client-akamai";
 
-const PAGE = "https://login.xero.com/identity/user/login";
-const PRECHECK = "https://login.xero.com/identity/user/login/pre-check";
+const PAGE = "https://matrix.leeclerk.org/";
+const SEARCH = "https://matrix.leeclerk.org/Home/SearchByCaseNumber";
+const CASE = process.env.CASE ?? "20tr456";
 
-const field = (html, name) => {
-  const at = html.indexOf(`name="${name}"`);
-  if (at < 0) return null;
-  const rest = html.slice(at);
-  const start = rest.indexOf('value="');
-  if (start < 0) return null;
-  const tail = rest.slice(start + 7);
-  const end = tail.indexOf('"');
-  return end < 0 ? null : tail.slice(0, end);
+const rows = (html) => {
+  const body = html.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
+
+  return [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((row) =>
+    [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cell) =>
+      cell[1].replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim()),
+  );
 };
 
-const client = await open({ page_url: PAGE, wait_ms: 100, rounds: 1 });
+const client = await open({ page_url: PAGE });
 
 try {
-  const found = await client.discover({});
-  console.log("discover:", { status: found.status, protected: found.protected });
-
   const solved = await client.solve({});
-  console.log("solve:", {
-    payload_bytes: solved.payload?.length ?? 0,
-    posts: solved.posts,
-  });
+  console.log(`session ${solved.run.machine}, _abck ${solved.cookies.abck.status}`);
 
   const page = await client.page();
-  const html = page.html || (await client.request({ url: PAGE })).body;
-
-  const token = page.fields?.__RequestVerificationToken ?? field(html, "__RequestVerificationToken");
-  const returnUrl = page.fields?.ReturnUrl ?? field(html, "ReturnUrl") ?? "";
-  if (!token) throw new Error("no antiforgery token");
-
-  const username = `nx${Date.now().toString(16)}@example.com`;
-
-  await client.request({
-    url: PRECHECK,
-    method: "POST",
-    json: { Username: username },
-    headers: {
-      accept: "application/json, text/plain, */*",
-      origin: "https://login.xero.com",
-      requestverificationtoken: token,
-    },
-  });
+  const token = page.fields.__RequestVerificationToken;
+  if (!token) throw new Error("the page carries no antiforgery token");
 
   const answer = await client.request({
-    url: PAGE,
+    url: SEARCH,
     method: "POST",
+    kind: "form",
     form: {
-      ReturnUrl: returnUrl,
-      PreCheckCompleted: "true",
-      Username: username,
-      Password: "Nx7!aQ2zR9kL",
       __RequestVerificationToken: token,
-    },
-    headers: {
-      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      origin: "https://login.xero.com",
-      "sec-fetch-dest": "document",
-      "sec-fetch-mode": "navigate",
-      "sec-fetch-site": "same-origin",
-      "upgrade-insecure-requests": "1",
+      "byCaseNumber.CaseNumber": CASE,
+      "byCaseNumber.CitationNumber": "",
+      searchButton: "SearchByCaseNumber",
     },
   });
 
-  const body = (answer.body ?? "").toLowerCase();
-  console.log("login:", {
-    status: answer.status,
-    refused: answer.refused,
-    credential_error: body.includes("email address or password") || body.includes("incorrect"),
-  });
+  const found = rows(answer.body);
+  console.log(`search ${answer.status}, refused ${answer.refused}, ${found.length} matching`);
+
+  for (const [number, citation, kind, status, filed] of found.slice(0, 5)) {
+    console.log(`  ${number}  ${citation}  ${kind}  ${status}  ${filed}`);
+  }
 } finally {
   await client.close();
 }
 ```
 
-`discover` reports the surface without running the sensor, so it is the cheapest way to tell whether a page is protected. `page` returns the document the session last loaded along with every input it declares, which saves a second fetch. `refused` is true on a 403, a 429, an access denied body or a challenge redirect, so a `false` there with a credential error in the body means the session passed and the login itself was rejected.
+`page` returns the document the session last loaded along with every input it declares, so the antiforgery token comes out of the page the sensor ran on rather than out of a second fetch that would carry a different one. `kind: "form"` sends the request the way the browser submits that form, headers and all, which is what the edge scores. `refused` is true on a 403, a 429, an access denied body or a challenge redirect.
+
+`discover` reports the surface without running the sensor, so it is the cheapest way to tell whether a page is protected at all.
 
 Events, deadlines, binary resolution and diagnostics work the same for every target and are covered on the [Node.js package page](/web-re-toolkit/packages/node/). What the client does and what the config controls is in [The Akamai client](/web-re-toolkit/guides/akamai/).

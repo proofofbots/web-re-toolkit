@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use wre_core::store::Store;
 use wre_net::proxy::ProxySpec;
 
-pub use wre_net::emulate::{Fingerprint, Platform, Profile};
+pub use wre_net::emulate::{Claim, Fingerprint, Platform, Profile};
 pub use wre_net::http::{FetchRequest, FetchResponse};
 pub use wre_net::jar::{Cookie, Jar};
 pub use wre_net::proxy::ProxyScheme;
@@ -67,6 +67,33 @@ impl Http {
         self.runtime
             .block_on(self.client.fetch(request))
             .map_err(|error| ClientError::resource(format!("{url}: {error}")))
+    }
+
+    pub fn fetch_together(&self, requests: Vec<FetchRequest>) -> Vec<ClientResult<FetchResponse>> {
+        self.runtime.block_on(async {
+            let mut running = Vec::with_capacity(requests.len());
+
+            for request in requests {
+                let client = self.client.clone();
+                running.push(tokio::spawn(async move {
+                    let url = request.url.clone();
+                    client
+                        .fetch(request)
+                        .await
+                        .map_err(|error| ClientError::resource(format!("{url}: {error}")))
+                }));
+            }
+
+            let mut answers = Vec::with_capacity(running.len());
+            for handle in running {
+                answers.push(match handle.await {
+                    Ok(answer) => answer,
+                    Err(error) => Err(ClientError::internal(format!("a subresource fetch failed: {error}"))),
+                });
+            }
+
+            answers
+        })
     }
 
     pub fn get_text(&self, url: &str) -> ClientResult<String> {
@@ -165,6 +192,7 @@ impl Services {
         if let Some(agent) = &options.user_agent {
             built.user_agent = Some(agent.clone());
         }
+        built.claim = options.claim.clone();
         if let Some(seconds) = options.timeout_secs {
             built.timeout = Duration::from_secs(seconds);
         }
@@ -186,6 +214,7 @@ impl Services {
 pub struct HttpOptions {
     pub proxy: Option<String>,
     pub fingerprint: Option<String>,
+    pub claim: Option<Claim>,
     pub user_agent: Option<String>,
     pub timeout_secs: Option<u64>,
     pub http2_only: bool,
@@ -210,10 +239,11 @@ impl HttpOptions {
 
     fn key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}",
             self.proxy.as_deref().unwrap_or("direct"),
             self.fingerprint.as_deref().unwrap_or("auto"),
             self.user_agent.as_deref().unwrap_or("default"),
+            self.claim.as_ref().map(|claim| claim.user_agent.as_str()).unwrap_or("no-claim"),
             self.timeout_secs.unwrap_or(30),
             self.http2_only,
             self.redirects,
@@ -487,4 +517,8 @@ impl Call {
         self.events
             .emit(self.id, "progress", json!({ "done": done, "total": total, "note": note }));
     }
+}
+
+pub fn emulated_user_agent(user_agent: &str) -> Option<String> {
+    Fingerprint::from_user_agent(user_agent).and_then(|found| found.user_agent())
 }

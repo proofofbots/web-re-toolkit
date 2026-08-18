@@ -282,7 +282,9 @@ async function readAudio() {
     output_latency: Number(context.outputLatency) || 0,
     max_channel_count: Number(context.destination.maxChannelCount) || 0,
     channel_count: Number(context.destination.channelCount) || 0,
-    rendered: ""
+    rendered: "",
+    rendered_sum: null,
+    reduction: null
   };
 
   try {
@@ -313,11 +315,24 @@ async function readAudio() {
     let sum = 0;
     for (let index = 4500; index < 5000; index += 1) sum += Math.abs(data[index]);
     audio.rendered = await digest(String(sum));
+    audio.rendered_sum = +data.reduce((total, sample) => total + sample, 0).toFixed(6);
+    audio.reduction = +compressor.reduction.toFixed(6);
   } catch (error) {
     audio.rendered = "";
   }
 
   return audio;
+}
+
+async function readStorage() {
+  if (!navigator.storage || !navigator.storage.estimate) return null;
+
+  try {
+    const estimate = await navigator.storage.estimate();
+    return { quota: Number(estimate.quota) || 0, usage: Number(estimate.usage) || 0 };
+  } catch (error) {
+    return null;
+  }
 }
 
 async function readBattery() {
@@ -382,11 +397,11 @@ function readOrientation() {
 function readChrome() {
   if (!window.chrome) return null;
 
-  const shape = { runtime: {}, app: {} };
+  const shape = { keys: Object.keys(window.chrome) };
 
   try {
     if (window.chrome.app) {
-      shape.app = { isInstalled: Boolean(window.chrome.app.isInstalled) };
+      shape.app = JSON.parse(JSON.stringify(window.chrome.app));
     }
     if (window.chrome.runtime) {
       shape.runtime = {};
@@ -479,7 +494,7 @@ async function readPermissions() {
       const status = await navigator.permissions.query({ name });
       states[name] = status.state;
     } catch (error) {
-      if (String(error.message || "").indexOf("not a valid enum value") >= 0) states[name] = "invalid";
+      states[name] = "error:" + String(error.message || "");
     }
   }
   return states;
@@ -735,6 +750,7 @@ async function collect() {
     layout: readLayout(),
     canvas: readCanvas(),
     audio: await readAudio(),
+    storage: await readStorage(),
     battery: await readBattery(),
     voices: readVoices(),
     media_devices: await readDevices(),

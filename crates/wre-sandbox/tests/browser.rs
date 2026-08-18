@@ -25,7 +25,12 @@ impl Transport for Recorder {
     fn send(&self, request: &Request) -> Answer {
         let mut seen = self.seen.lock().unwrap();
         seen.push(request.clone());
-        Answer { status: 201, body: r#"{"success":true}"#.to_string(), headers: Vec::new() }
+        Answer {
+            status: 201,
+            body: r#"{"success":true}"#.to_string(),
+            headers: Vec::new(),
+            paced: 0.0,
+        }
     }
 }
 
@@ -91,12 +96,20 @@ fn the_form_inventory_is_the_one_the_html_declares() {
 }
 
 #[test]
-fn a_hidden_field_keeps_its_name_but_not_its_value() {
+fn a_field_reports_its_value_attribute_as_its_default_value() {
     let mut browser = mounted();
 
     assert_eq!(
         ask(&mut browser, "document.getElementsByTagName('input')[0].getAttribute('value')"),
-        Value::Null
+        json!("secret")
+    );
+    assert_eq!(
+        ask(&mut browser, "document.getElementsByTagName('input')[0].defaultValue"),
+        json!("secret")
+    );
+    assert_eq!(
+        ask(&mut browser, "document.getElementsByTagName('input')[1].defaultValue"),
+        json!("")
     );
 }
 
@@ -380,7 +393,10 @@ fn measure_text_scales_the_recorded_font_widths() {
     .as_f64()
     .unwrap();
 
-    assert!((arial - 87.5).abs() < 0.01, "{arial}");
+    let profile = Profile::desktop_chrome();
+    let recorded = profile.font_widths["Arial"];
+
+    assert!((arial - recorded).abs() < 0.01, "{arial}");
 
     let half = ask(
         &mut browser,
@@ -393,7 +409,9 @@ fn measure_text_scales_the_recorded_font_widths() {
     .as_f64()
     .unwrap();
 
-    assert!((half - 52.5).abs() < 0.01, "{half}");
+    let courier = profile.font_widths["Courier New"] / 2.0;
+
+    assert!((half - courier).abs() < 0.01, "{half}");
 }
 
 #[test]
@@ -415,18 +433,30 @@ fn the_profile_sections_reach_the_page() {
     assert_eq!(ask(&mut browser, "typeof navigator.javaEnabled"), json!("function"));
     assert_eq!(ask(&mut browser, "navigator.javaEnabled()"), json!(false));
     assert_eq!(ask(&mut browser, "navigator.getGamepads().length"), json!(4));
-    assert_eq!(ask(&mut browser, "performance.memory.jsHeapSizeLimit"), json!(4_294_705_152u64));
+    let profile = Profile::desktop_chrome();
+    let intl = profile.intl.clone().expect("the profile carries an intl");
+
+    assert_eq!(
+        ask(&mut browser, "performance.memory.jsHeapSizeLimit"),
+        json!(profile.memory.expect("the profile carries a heap").js_heap_size_limit as u64)
+    );
     assert_eq!(
         ask(&mut browser, "Intl.DateTimeFormat().resolvedOptions().timeZone"),
-        json!("Europe/London")
+        json!(intl.time_zone)
     );
-    assert_eq!(ask(&mut browser, "new Date().getTimezoneOffset()"), json!(0));
+    assert_eq!(
+        ask(&mut browser, "new Date().getTimezoneOffset()"),
+        json!(intl.timezone_offset)
+    );
     assert_eq!(ask(&mut browser, "screen.orientation.type"), json!("landscape-primary"));
     assert_eq!(ask(&mut browser, "typeof chrome.loadTimes"), json!("function"));
     assert_eq!(ask(&mut browser, "chrome.loadTimes().npnNegotiatedProtocol"), json!("h2"));
     assert_eq!(ask(&mut browser, "matchMedia('(pointer: fine)').matches"), json!(true));
     assert_eq!(ask(&mut browser, "typeof AudioContext"), json!("function"));
-    assert_eq!(ask(&mut browser, "new AudioContext().sampleRate"), json!(48000));
+    assert_eq!(
+        ask(&mut browser, "new AudioContext().sampleRate"),
+        json!(Profile::desktop_chrome().audio.expect("the profile carries audio").sample_rate as u64)
+    );
 }
 
 #[test]
@@ -506,4 +536,204 @@ fn the_page_cannot_see_the_host_bridges() {
     );
 
     assert_eq!(leaks, json!([]));
+}
+
+#[test]
+fn a_shared_worker_answers_the_page_with_what_it_measured() {
+    let mut browser = mounted();
+
+    let answer = ask(
+        &mut browser,
+        r#"(function () {
+             var source = "onconnect = function (event) { event.ports[0].postMessage({ \
+                 ua: navigator.userAgent, \
+                 tz: Intl.DateTimeFormat().resolvedOptions().timeZone, \
+                 hc: navigator.hardwareConcurrency, \
+                 gpu: (function () { \
+                   var context = new OffscreenCanvas(0, 0).getContext('webgl'); \
+                   var info = context.getExtension('WEBGL_debug_renderer_info'); \
+                   return context.getParameter(info.UNMASKED_RENDERER_WEBGL); \
+                 })(), \
+                 gpu2: (function () { \
+                   var context = new OffscreenCanvas(0, 0).getContext('webgl2'); \
+                   var info = context.getExtension('WEBGL_debug_renderer_info'); \
+                   return context.getParameter(info.UNMASKED_VENDOR_WEBGL); \
+                 })() \
+               }); };";
+
+             var url = URL.createObjectURL(new Blob([source], { type: "application/javascript" }));
+             var worker = new SharedWorker(url);
+             var seen = null;
+
+             worker.port.onmessage = function (event) { seen = event.data; };
+             worker.port.start();
+
+             return seen;
+           })()"#,
+    );
+
+    assert_eq!(answer["ua"], ask(&mut browser, "navigator.userAgent"));
+    assert_eq!(answer["hc"], ask(&mut browser, "navigator.hardwareConcurrency"));
+    assert!(answer["gpu"].is_string(), "no webgl renderer in the worker: {answer}");
+    assert!(answer["gpu2"].is_string(), "no webgl2 vendor in the worker: {answer}");
+}
+
+#[test]
+fn the_worker_cannot_reach_the_extensions_it_probes() {
+    let mut browser = mounted();
+
+    browser
+        .run(
+            r#"globalThis.__reached = null;
+               fetch("chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/x.png", { method: "HEAD" })
+                 .then(function () { globalThis.__reached = true; })
+                 .catch(function () { globalThis.__reached = false; });"#,
+            "test:extension-probe",
+        )
+        .expect("probe");
+
+    assert_eq!(ask(&mut browser, "globalThis.__reached"), json!(false));
+}
+
+#[test]
+fn the_clocks_agree_with_each_other() {
+    let mut browser = mounted();
+
+    let drift = ask(
+        &mut browser,
+        "Math.round(Date.now() - (performance.timeOrigin + performance.now()))",
+    );
+
+    let start = ask(&mut browser, "performance.now()").as_f64().unwrap_or_default();
+    let stamp = ask(&mut browser, "Date.now()").as_f64().unwrap_or_default();
+    let later = ask(&mut browser, "performance.now()").as_f64().unwrap_or_default();
+    let after = ask(&mut browser, "Date.now()").as_f64().unwrap_or_default();
+
+    assert!(later >= start, "performance.now went backwards: {start} then {later}");
+    assert!(after >= stamp, "Date.now went backwards: {stamp} then {after}");
+    assert!(
+        drift.as_f64().unwrap_or_default().abs() < 50.0,
+        "Date.now and performance disagree by {drift} ms"
+    );
+}
+
+#[test]
+fn every_permission_the_page_asks_about_settles() {
+    let mut browser = mounted();
+
+    browser
+        .run(
+            r#"globalThis.__states = [];
+               var names = ["geolocation", "notifications", "push", "midi", "camera", "microphone",
+                 "speaker", "device-info", "background-sync", "bluetooth", "persistent-storage",
+                 "ambient-light-sensor", "accelerometer", "gyroscope", "magnetometer",
+                 "clipboard-read", "clipboard-write", "payment-handler", "idle-detection",
+                 "screen-wake-lock"];
+
+               names.forEach(function (name) {
+                 try {
+                   navigator.permissions.query({ name: name })
+                     .then(function (status) { globalThis.__states.push(name + ":" + status.state); })
+                     .catch(function () { globalThis.__states.push(name + ":error"); });
+                 } catch (error) {
+                   globalThis.__states.push(name + ":threw");
+                 }
+               });"#,
+            "test:permissions",
+        )
+        .expect("permissions");
+
+    let settled = ask(&mut browser, "globalThis.__states.length");
+    assert_eq!(settled, json!(20), "not every permission settled: {:?}", ask(&mut browser, "globalThis.__states"));
+}
+
+#[test]
+fn the_navigator_keeps_its_prototype_and_its_permissions() {
+    let mut browser = mounted();
+
+    assert_eq!(
+        ask(&mut browser, "Object.getPrototypeOf(navigator) === Navigator.prototype"),
+        json!(true),
+        "navigator is not a Navigator"
+    );
+
+    assert_eq!(ask(&mut browser, "Boolean(navigator.permissions)"), json!(true));
+    assert_eq!(ask(&mut browser, "typeof navigator.permissions.query"), json!("function"));
+    assert_eq!(
+        ask(&mut browser, "Object.prototype.hasOwnProperty('javaEnabled')"),
+        json!(false),
+        "the navigator methods landed on Object.prototype"
+    );
+    assert_eq!(
+        ask(&mut browser, "Navigator.prototype.hasOwnProperty('javaEnabled')"),
+        json!(true)
+    );
+}
+
+#[test]
+fn an_invalid_permission_name_rejects_instead_of_throwing() {
+    let mut browser = mounted();
+
+    browser
+        .run(
+            r#"globalThis.__answer = "not settled";
+               try {
+                 navigator.permissions.query({ name: "speaker" })
+                   .then(function (status) { globalThis.__answer = "resolved:" + status.state; })
+                   .catch(function (error) { globalThis.__answer = "rejected"; });
+               } catch (error) {
+                 globalThis.__answer = "threw";
+               }"#,
+            "test:invalid-permission",
+        )
+        .expect("query");
+
+    assert_eq!(ask(&mut browser, "globalThis.__answer"), json!("rejected"));
+}
+
+#[test]
+fn the_permission_sweep_the_sensor_runs_finishes() {
+    let mut browser = mounted();
+
+    browser
+        .run(
+            r#"globalThis.__digits = "";
+               var names = ["geolocation", "notifications", "push", "midi", "camera", "microphone",
+                 "speaker", "device-info", "background-sync", "bluetooth", "persistent-storage",
+                 "ambient-light-sensor", "accelerometer", "gyroscope", "magnetometer",
+                 "clipboard", "accessibility-events", "payment-handler", "idle-detection",
+                 "screen-wake-lock"];
+
+               var states = [];
+               var pending = names.map(function (name, index) {
+                 return navigator.permissions.query({ name: name })
+                   .then(function (status) { states[index] = status.state === "granted" ? 9 : 4; })
+                   .catch(function () { states[index] = 2; });
+               });
+
+               Promise.all(pending).then(function () { globalThis.__digits = states.join(""); });"#,
+            "test:permission-sweep",
+        )
+        .expect("sweep");
+
+    let digits = ask(&mut browser, "globalThis.__digits");
+    assert_eq!(digits.as_str().map(str::len), Some(20), "sweep did not finish: {digits}");
+}
+
+#[test]
+fn the_last_permission_in_the_sweep_settles_too() {
+    let mut browser = mounted();
+
+    browser
+        .run(
+            r#"globalThis.__last = "not settled";
+               navigator.permissions.query({ name: "accessibility-events" })
+                 .then(function (status) { globalThis.__last = "resolved:" + status.state; })
+                 .catch(function () { globalThis.__last = "rejected"; });"#,
+            "test:last-permission",
+        )
+        .expect("query");
+
+    let answer = ask(&mut browser, "globalThis.__last");
+    assert_ne!(answer, json!("not settled"), "accessibility-events never settled");
 }

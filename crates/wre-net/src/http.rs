@@ -1,11 +1,12 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use wreq::header::{HeaderMap, HeaderName, HeaderValue};
+use wreq::header::{HeaderMap, HeaderName, HeaderValue, OrigHeaderMap};
 
 use wre_core::error::{Error, Result};
 
-use crate::emulate::Fingerprint;
+use crate::emulate::{Claim, Claimed, Fingerprint};
 use crate::jar::Jar;
 use crate::proxy::ProxySpec;
 
@@ -15,6 +16,7 @@ pub const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) App
 pub struct ClientOptions {
     pub proxy: Option<ProxySpec>,
     pub fingerprint: Option<Fingerprint>,
+    pub claim: Option<Claim>,
     pub user_agent: Option<String>,
     pub timeout: Duration,
     pub accept_invalid_certs: bool,
@@ -29,6 +31,7 @@ impl Default for ClientOptions {
         Self {
             proxy: None,
             fingerprint: None,
+            claim: None,
             user_agent: None,
             timeout: Duration::from_secs(30),
             accept_invalid_certs: false,
@@ -41,8 +44,6 @@ impl Default for ClientOptions {
 }
 
 impl ClientOptions {
-    /// The fingerprint the client will emulate: the explicit one, otherwise the closest
-    /// match for the requested user agent, otherwise the crate default.
     pub fn resolved_fingerprint(&self) -> Fingerprint {
         self.fingerprint
             .or_else(|| self.user_agent.as_deref().and_then(Fingerprint::from_user_agent))
@@ -71,8 +72,14 @@ impl Client {
     pub fn new(options: ClientOptions) -> Result<Self> {
         let fingerprint = options.resolved_fingerprint();
 
-        let mut builder = wreq::Client::builder()
-            .emulation(fingerprint)
+        let mut builder = wreq::Client::builder();
+
+        builder = match options.claim.clone() {
+            Some(claim) => builder.emulation(Claimed { fingerprint, claim }),
+            None => builder.emulation(fingerprint),
+        };
+
+        builder = builder
             .timeout(options.timeout)
             .tls_cert_verification(!options.accept_invalid_certs)
             .cookie_store(options.cookies || options.jar.is_some())
@@ -87,7 +94,7 @@ impl Client {
         }
 
         if let Some(jar) = &options.jar {
-            builder = builder.cookie_provider(jar.store());
+            builder = builder.cookie_provider(Arc::new(jar.clone()));
         }
 
         if options.http2_only {
@@ -139,7 +146,6 @@ impl Client {
         self.options.jar.as_ref()
     }
 
-    /// The `User-Agent` this client sends unless a request overrides it.
     pub fn user_agent(&self) -> Option<String> {
         self.options
             .user_agent
@@ -187,6 +193,14 @@ impl Client {
         }
 
         builder = builder.headers(header_map(&request.headers)?);
+
+        if !request.order.is_empty() {
+            let mut order = OrigHeaderMap::with_capacity(request.order.len());
+            for name in &request.order {
+                order.insert(name.clone());
+            }
+            builder = builder.orig_headers(order);
+        }
 
         if let Some(body) = request.body {
             builder = builder.body(body);
@@ -250,6 +264,8 @@ pub struct FetchRequest {
     pub body: Option<Vec<u8>>,
     #[serde(default)]
     pub fingerprint: Option<Fingerprint>,
+    #[serde(default)]
+    pub order: Vec<String>,
 }
 
 fn get_method() -> String {
@@ -277,6 +293,11 @@ impl FetchRequest {
 
     pub fn emulating(mut self, fingerprint: Fingerprint) -> Self {
         self.fingerprint = Some(fingerprint);
+        self
+    }
+
+    pub fn ordered(mut self, names: &[&str]) -> Self {
+        self.order = names.iter().map(|name| name.to_string()).collect();
         self
     }
 }

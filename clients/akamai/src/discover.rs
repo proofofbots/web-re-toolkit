@@ -21,7 +21,7 @@ static CHALLENGE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static SEGMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{2,24}$").expect("segment pattern"));
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{1,24}$").expect("segment pattern"));
 
 const MARK: &str = "aeiouy13579";
 

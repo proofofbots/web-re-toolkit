@@ -21,11 +21,17 @@ fn the_profile_values_are_what_the_page_reads() {
         ask(&mut realm, "navigator.platform"),
         json!("MacIntel")
     );
-    assert_eq!(ask(&mut realm, "navigator.hardwareConcurrency"), json!(10));
+    let profile = Profile::desktop_chrome();
+    let reads = |brand: &str, name: &str| profile.property(brand, name).cloned().unwrap();
+
+    assert_eq!(
+        ask(&mut realm, "navigator.hardwareConcurrency"),
+        reads("Navigator", "hardwareConcurrency")
+    );
     assert_eq!(ask(&mut realm, "navigator.webdriver"), json!(false));
-    assert_eq!(ask(&mut realm, "navigator.languages"), json!(["en-GB", "en"]));
-    assert_eq!(ask(&mut realm, "screen.width"), json!(1728));
-    assert_eq!(ask(&mut realm, "innerWidth"), json!(1512));
+    assert_eq!(ask(&mut realm, "navigator.languages"), reads("Navigator", "languages"));
+    assert_eq!(ask(&mut realm, "screen.width"), reads("Screen", "width"));
+    assert_eq!(ask(&mut realm, "innerWidth"), reads("Window", "innerWidth"));
     assert_eq!(
         ask(&mut realm, "devicePixelRatio").as_f64(),
         Some(2.0)
@@ -105,7 +111,7 @@ fn the_same_accessor_still_works_on_a_real_receiver() {
         "Object.getOwnPropertyDescriptor(Navigator.prototype,'userAgent').get.call(navigator)",
     );
 
-    assert!(outcome.as_str().unwrap().contains("Chrome/140"));
+    assert!(outcome.as_str().unwrap().contains("Chrome/151"));
 }
 
 #[test]
@@ -188,11 +194,13 @@ fn webgl_answers_from_the_profile_and_records_what_it_cannot() {
         &mut realm,
         "WebGLRenderingContext.prototype.getParameter.call(null, 37446)",
     );
-    assert!(renderer.as_str().unwrap().contains("Apple M1 Pro"), "{renderer}");
+    let profile = Profile::desktop_chrome();
+
+    assert_eq!(Some(&renderer), profile.webgl_parameters.get("37446"));
 
     assert_eq!(
         ask(&mut realm, "WebGLRenderingContext.prototype.getSupportedExtensions().length"),
-        json!(11)
+        json!(profile.webgl_extensions.len())
     );
 
     assert_eq!(
@@ -201,7 +209,10 @@ fn webgl_answers_from_the_profile_and_records_what_it_cannot() {
     );
 
     assert!(
-        sandbox.misses().iter().any(|entry| entry == "webgl getParameter(9999)"),
+        sandbox
+            .misses()
+            .iter()
+            .any(|entry| entry == "WebGLRenderingContext getParameter(9999)"),
         "{:?}",
         sandbox.misses()
     );
@@ -445,7 +456,10 @@ fn permissions_query_agrees_with_the_profile() {
         )
         .unwrap();
 
-    assert_eq!(ask(&mut realm, "__state"), json!("default"));
+    assert_eq!(
+        ask(&mut realm, "__state"),
+        json!(Profile::desktop_chrome().permissions["notifications"])
+    );
 }
 
 #[test]

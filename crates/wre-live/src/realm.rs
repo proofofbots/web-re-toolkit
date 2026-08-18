@@ -359,6 +359,11 @@ impl Realm {
         self.frames.len()
     }
 
+    pub fn pump_microtasks(&mut self) {
+        let _entered = self.enter();
+        self.isolate.perform_microtask_checkpoint();
+    }
+
     pub fn eval_unit_in(&mut self, frame: usize, source: &str, name: &str) -> Result<()> {
         self.eval_value_in(Some(frame), source, name).map(|_| ())
     }
@@ -1278,6 +1283,12 @@ impl Realm {
         let _entered = self.enter();
         self.isolate.get_heap_statistics().used_heap_size()
     }
+
+    pub fn heap(&mut self) -> (usize, usize) {
+        let _entered = self.enter();
+        let stats = self.isolate.get_heap_statistics();
+        (stats.total_heap_size(), stats.used_heap_size())
+    }
 }
 
 fn host_trampoline(
@@ -1334,6 +1345,15 @@ fn host_trampoline(
             }
         },
         Err(error) => {
+            let promised = entry.shape.as_ref().is_some_and(|shape| shape.promise);
+
+            if promised {
+                if let Some(rejected) = rejection(scope, &error.to_string()) {
+                    out.set(rejected);
+                    return;
+                }
+            }
+
             let text = format!("{}: {error}", entry.name);
             if let Some(message) = v8::String::new(scope, &text) {
                 let exception = v8::Exception::error(scope, message);
@@ -1487,6 +1507,15 @@ fn shaped<'s>(
     }
 
     Some(finished(scope, shape, object))
+}
+
+fn rejection<'s>(scope: &mut v8::PinScope<'s, '_>, text: &str) -> Option<v8::Local<'s, v8::Value>> {
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let message = v8::String::new(scope, text)?;
+    let exception = v8::Exception::type_error(scope, message);
+    let promise = resolver.get_promise(scope);
+    resolver.reject(scope, exception);
+    Some(promise.into())
 }
 
 fn finished<'s>(

@@ -31,91 +31,59 @@ For asyncio, wrap the calls with `asyncio.to_thread`, or use `wre_runtime.aio.As
 
 ## A full run
 
-Warm a session against a protected login page, read the antiforgery token out of the page the session already loaded, and post a form through the same jar.
+Warm a session against a protected page, read the antiforgery token out of the page the session already loaded, and post the site's own search form through the same jar. This is the Lee County court records site, which is Akamai protected end to end: the search answers a session it does not believe with an access denied page or an adaptive challenge, and answers one it does with the case.
 
 ```python
-import time
-from typing import Optional
+import os
+import re
 
 from wre_client_akamai import open_client
 
-PAGE = "https://login.xero.com/identity/user/login"
-PRECHECK = "https://login.xero.com/identity/user/login/pre-check"
+PAGE = "https://matrix.leeclerk.org/"
+SEARCH = "https://matrix.leeclerk.org/Home/SearchByCaseNumber"
+CASE = os.environ.get("CASE", "20tr456")
 
 
-def field(html: str, name: str) -> Optional[str]:
-    at = html.find(f'name="{name}"')
-    if at < 0:
-        return None
-    rest = html[at:]
-    start = rest.find('value="')
-    if start < 0:
-        return None
-    tail = rest[start + 7 :]
-    end = tail.find('"')
-    return None if end < 0 else tail[:end]
+def rows(html: str) -> list[list[str]]:
+    body = html.split("<tbody>")[1].split("</tbody>")[0] if "<tbody>" in html else ""
+
+    return [
+        [re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", cell)).strip()
+         for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S)
+    ]
 
 
-with open_client({"page_url": PAGE, "wait_ms": 100, "rounds": 1}) as client:
-    found = client.discover({})
-    print("discover:", {"status": found["status"], "protected": found["protected"]})
-
+with open_client({"page_url": PAGE}) as client:
     solved = client.solve({})
-    print("solve:", {
-        "payload_bytes": len(solved.get("payload") or ""),
-        "posts": solved["posts"],
-    })
+    print(f"session {solved['run']['machine']}, _abck {solved['cookies']['abck']['status']}")
 
     page = client.page()
-    html = page["html"] or client.request({"url": PAGE})["body"]
-    fields = page["fields"]
-
-    token = fields.get("__RequestVerificationToken") or field(html, "__RequestVerificationToken")
-    return_url = fields.get("ReturnUrl") or field(html, "ReturnUrl") or ""
+    token = page["fields"].get("__RequestVerificationToken")
     if not token:
-        raise RuntimeError("no antiforgery token")
-
-    username = f"nx{int(time.time()):x}@example.com"
-
-    client.request({
-        "url": PRECHECK,
-        "method": "POST",
-        "json": {"Username": username},
-        "headers": {
-            "accept": "application/json, text/plain, */*",
-            "origin": "https://login.xero.com",
-            "requestverificationtoken": token,
-        },
-    })
+        raise SystemExit("the page carries no antiforgery token")
 
     answer = client.request({
-        "url": PAGE,
+        "url": SEARCH,
         "method": "POST",
+        "kind": "form",
         "form": {
-            "ReturnUrl": return_url,
-            "PreCheckCompleted": "true",
-            "Username": username,
-            "Password": "Nx7!aQ2zR9kL",
             "__RequestVerificationToken": token,
-        },
-        "headers": {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "origin": "https://login.xero.com",
-            "sec-fetch-dest": "document",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-site": "same-origin",
-            "upgrade-insecure-requests": "1",
+            "byCaseNumber.CaseNumber": CASE,
+            "byCaseNumber.CitationNumber": "",
+            "searchButton": "SearchByCaseNumber",
         },
     })
 
-    body = (answer["body"] or "").lower()
-    print("login:", {
-        "status": answer["status"],
-        "refused": answer["refused"],
-        "credential_error": "email address or password" in body or "incorrect" in body,
-    })
+    found = rows(answer["body"])
+    print(f"search {answer['status']}, refused {answer['refused']}, {len(found)} matching")
+
+    for number, citation, kind, status, filed, *rest in found[:5]:
+        print(f"  {number}  {citation}  {kind}  {status}  {filed}")
 ```
 
-`discover` reports the surface without running the sensor, so it is the cheapest way to tell whether a page is protected. `page` returns the document the session last loaded along with every input it declares, which saves a second fetch. `refused` is true on a 403, a 429, an access denied body or a challenge redirect, so a `False` there with a credential error in the body means the session passed and the login itself was rejected.
+`page` returns the document the session last loaded along with every input it declares, so the antiforgery token comes out of the page the sensor ran on rather than out of a second fetch that would carry a different one. `"kind": "form"` sends the request the way the browser submits that form, headers and all, which is what the edge scores. `refused` is true on a 403, a 429, an access denied body or a challenge redirect.
+
+`discover` reports the surface without running the sensor, so it is the cheapest way to tell whether a page is protected at all.
 
 Events, deadlines, errors and diagnostics work the same for every target and are covered on the [Python package page](/web-re-toolkit/packages/python/). What the client does and what the config controls is in [The Akamai client](/web-re-toolkit/guides/akamai/).

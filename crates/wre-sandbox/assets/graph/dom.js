@@ -1288,12 +1288,20 @@
     for (var metric = 0; metric < WINDOW_METRICS.length; metric += 1) {
       (function (field) {
         if (typeof view[field] !== "number") return;
-        patchGetter(globalThis, field, function () { return view[field]; });
+        patchGetter(globalThis, field, function () {
+          if (field === "pageXOffset" && globalThis[Symbol.for("wre.scroll")]) return globalThis[Symbol.for("wre.scroll")].x;
+          if (field === "pageYOffset" && globalThis[Symbol.for("wre.scroll")]) return globalThis[Symbol.for("wre.scroll")].y;
+          return view[field];
+        });
       })(WINDOW_METRICS[metric]);
     }
 
-    patchGetter(globalThis, "scrollX", function () { return view.pageXOffset || 0; });
-    patchGetter(globalThis, "scrollY", function () { return view.pageYOffset || 0; });
+    patchGetter(globalThis, "scrollX", function () {
+      return (globalThis[Symbol.for("wre.scroll")] && globalThis[Symbol.for("wre.scroll")].x) || view.pageXOffset || 0;
+    });
+    patchGetter(globalThis, "scrollY", function () {
+      return (globalThis[Symbol.for("wre.scroll")] && globalThis[Symbol.for("wre.scroll")].y) || view.pageYOffset || 0;
+    });
 
     var visual = globalThis.visualViewport;
 
@@ -2527,7 +2535,14 @@
     env.makeRect = makeRect;
 
     patch(Element.prototype, "getBoundingClientRect", function getBoundingClientRect() {
-      return makeRect(env.boxOf(this));
+      var box = env.boxOf(this);
+      var offset = globalThis[Symbol.for("wre.scroll")] || { x: 0, y: 0 };
+      return makeRect({
+        x: box.x - offset.x,
+        y: box.y - offset.y,
+        width: box.width,
+        height: box.height,
+      });
     });
 
     patch(Element.prototype, "getClientRects", function getClientRects() {
@@ -5189,7 +5204,35 @@
     return { toString: function () { return ""; }, rangeCount: 0 };
   });
 
-  patch(globalThis, "scrollTo", function scrollTo() { return undefined; });
+  globalThis[Symbol.for("wre.scroll")] = globalThis[Symbol.for("wre.scroll")] || { x: 0, y: 0 };
+
+  var moveScroll = function (x, y) {
+    var at = globalThis[Symbol.for("wre.scroll")];
+    var left = Math.max(0, Number(x) || 0);
+    var top = Math.max(0, Number(y) || 0);
+
+    if (left === at.x && top === at.y) return undefined;
+
+    at.x = left;
+    at.y = top;
+
+    if (document.documentElement) document.documentElement.scrollTop = top;
+    if (document.body) document.body.scrollTop = top;
+
+    dispatch(globalThis, makeEvent("scroll"));
+    return undefined;
+  };
+
+  patch(globalThis, "scrollTo", function scrollTo(x, y) {
+    if (x && typeof x === "object") return moveScroll(x.left, x.top);
+    return moveScroll(x, y);
+  });
+
+  patch(globalThis, "scrollBy", function scrollBy(x, y) {
+    var at = globalThis[Symbol.for("wre.scroll")];
+    if (x && typeof x === "object") return moveScroll(at.x + (Number(x.left) || 0), at.y + (Number(x.top) || 0));
+    return moveScroll(at.x + (Number(x) || 0), at.y + (Number(y) || 0));
+  });
   patch(globalThis, "focus", function focus() { return undefined; });
   patch(globalThis, "blur", function blur() { return undefined; });
   patch(globalThis, "open", function open() { return null; });

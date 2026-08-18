@@ -23,8 +23,24 @@ pub fn extract(body: &str) -> Option<String> {
 }
 
 pub fn wrap(payload: &str) -> String {
+    let payload = retimed(payload);
     serde_json::json!({ "sensor_data": payload }).to_string()
 }
+
+fn retimed(payload: &str) -> String {
+    let Ok(list) = std::env::var("WRE_AKAMAI_TIMINGS") else {
+        return payload.to_string();
+    };
+
+    let mut parts: Vec<&str> = payload.split(';').collect();
+    if parts.len() < 8 {
+        return payload.to_string();
+    }
+
+    parts[6] = list.as_str();
+    parts.join(";")
+}
+
 
 pub fn payload_of(header: &str) -> Option<String> {
     let field = header.split(SEPARATOR).find(|part| part.starts_with(FIELD))?;

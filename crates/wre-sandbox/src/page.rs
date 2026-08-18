@@ -11,8 +11,12 @@ use wre_core::error::{Error, Result};
 static SCRIPT_TAG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<script\b([^>]*)>"#).expect("script pattern"));
 
+static INLINE_SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<script\b([^>]*)>(.*?)</script\s*>"#).expect("inline script pattern")
+});
+
 static FIELD_TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?is)<(input|textarea|select)\b([^>]*)>"#).expect("field pattern"));
+    LazyLock::new(|| Regex::new(r#"(?is)<(input|textarea|select|button)\b([^>]*)>"#).expect("field pattern"));
 
 static FORM_TAG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<form\b([^>]*)>"#).expect("form pattern"));
@@ -63,6 +67,7 @@ pub struct Page {
     pub title: String,
     #[serde(default)]
     pub scripts: Vec<String>,
+    pub current_script: String,
     #[serde(default)]
     pub fields: Vec<Field>,
     #[serde(default)]
@@ -71,8 +76,15 @@ pub struct Page {
     pub epoch_ms: f64,
     #[serde(default)]
     pub friction_ms: f64,
+    pub geometry: Option<Value>,
     #[serde(default)]
     pub html_limit: usize,
+    #[serde(default)]
+    field_offsets: Vec<usize>,
+    #[serde(default)]
+    script_offsets: Vec<(String, usize)>,
+    #[serde(default)]
+    inline_scripts: Vec<(usize, String)>,
 }
 
 impl Page {
@@ -83,12 +95,55 @@ impl Page {
             referrer: String::new(),
             title: String::new(),
             scripts: Vec::new(),
+            current_script: String::new(),
             fields: Vec::new(),
             forms: Vec::new(),
             epoch_ms: 0.0,
             friction_ms: 0.12,
+            geometry: None,
             html_limit: 300_000,
+            field_offsets: Vec::new(),
+            script_offsets: Vec::new(),
+            inline_scripts: Vec::new(),
         }
+    }
+
+    pub fn inline_scripts(&self) -> (Vec<String>, Vec<String>) {
+        let boundary = self
+            .script_offsets
+            .iter()
+            .find(|(src, _)| src == &self.current_script)
+            .map(|(_, at)| *at)
+            .unwrap_or(usize::MAX);
+
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+
+        for (at, source) in &self.inline_scripts {
+            if *at < boundary {
+                before.push(source.clone());
+            } else {
+                after.push(source.clone());
+            }
+        }
+
+        (before, after)
+    }
+
+    pub fn fields_at_current_script(&self) -> usize {
+        if self.current_script.is_empty() {
+            return self.fields.len();
+        }
+
+        let Some((_, at)) = self
+            .script_offsets
+            .iter()
+            .find(|(src, _)| src == &self.current_script)
+        else {
+            return self.fields.len();
+        };
+
+        self.field_offsets.iter().filter(|offset| *offset < at).count()
     }
 
     pub fn read(url: impl Into<String>, html: &str) -> Self {
@@ -106,13 +161,30 @@ impl Page {
             .map(|found| found.as_str().trim().to_string())
             .unwrap_or_default();
 
-        self.scripts = SCRIPT_TAG
+        self.script_offsets = SCRIPT_TAG
             .captures_iter(html)
-            .map(|found| attributes(found.get(1).map_or("", |part| part.as_str())))
-            .map(|attributes| match attributes.get("src") {
-                Some(src) => absolute(&base, src),
-                None => "[inline]".to_string(),
+            .map(|found| {
+                let at = found.get(0).map_or(0, |part| part.start());
+                let attributes = attributes(found.get(1).map_or("", |part| part.as_str()));
+                let src = match attributes.get("src") {
+                    Some(src) => absolute(&base, src),
+                    None => "[inline]".to_string(),
+                };
+
+                (src, at)
             })
+            .collect();
+
+        self.scripts = self.script_offsets.iter().map(|(src, _)| src.clone()).collect();
+
+        self.inline_scripts = INLINE_SCRIPT
+            .captures_iter(html)
+            .filter(|found| !attributes(found.get(1).map_or("", |part| part.as_str())).contains_key("src"))
+            .map(|found| {
+                let at = found.get(0).map_or(0, |part| part.start());
+                (at, found.get(2).map_or("", |part| part.as_str()).to_string())
+            })
+            .filter(|(_, source)| !source.trim().is_empty())
             .collect();
 
         self.forms = FORM_TAG
@@ -120,12 +192,16 @@ impl Page {
             .map(|found| Form { attributes: attributes(found.get(1).map_or("", |part| part.as_str())) })
             .collect();
 
+        self.field_offsets = FIELD_TAG
+            .captures_iter(html)
+            .map(|found| found.get(0).map_or(0, |part| part.start()))
+            .collect();
+
         self.fields = FIELD_TAG
             .captures_iter(html)
             .map(|found| {
                 let tag = found.get(1).map_or("input", |part| part.as_str()).to_lowercase();
-                let mut attributes = attributes(found.get(2).map_or("", |part| part.as_str()));
-                attributes.remove("value");
+                let attributes = attributes(found.get(2).map_or("", |part| part.as_str()));
 
                 let hidden = attributes.get("type").map(|kind| kind == "hidden").unwrap_or(false)
                     || attributes.contains_key("hidden");
@@ -159,6 +235,22 @@ impl Page {
 
     pub fn with_friction(mut self, friction_ms: f64) -> Self {
         self.friction_ms = friction_ms;
+        self
+    }
+
+    pub fn with_geometry(mut self, geometry: Value) -> Self {
+        self.geometry = Some(geometry);
+        self
+    }
+
+    pub fn running(mut self, url: impl Into<String>) -> Self {
+        let url = url.into();
+        self.current_script = url.clone();
+
+        if !self.scripts.contains(&url) {
+            self.scripts.push(url);
+        }
+
         self
     }
 
@@ -210,10 +302,13 @@ impl Page {
             "referrer": self.referrer,
             "title": self.title,
             "scripts": self.scripts,
+            "current_script": self.current_script,
             "inputs": self.fields,
+            "inputs_parsed": self.fields_at_current_script(),
             "forms": self.forms,
             "epoch": self.epoch_ms,
             "friction": self.friction_ms,
+            "geometry": self.geometry.clone().unwrap_or(Value::Null),
         }))
     }
 }
@@ -278,14 +373,28 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_field_is_marked_invisible_and_its_value_is_dropped() {
+    fn a_hidden_field_is_marked_invisible_and_keeps_its_value() {
         let page = Page::read("https://login.example.com/", SAMPLE);
         let hidden = &page.fields[0];
 
         assert_eq!(hidden.attributes.get("name").map(String::as_str), Some("__RequestVerificationToken"));
-        assert!(!hidden.attributes.contains_key("value"));
+        assert_eq!(hidden.attributes.get("value").map(String::as_str), Some("secret-token"));
         assert!(!hidden.visible);
         assert!(page.fields[1].visible);
+    }
+
+    #[test]
+    fn only_the_fields_above_the_running_script_count_as_parsed() {
+        let html = r#"<html><body>
+<input name="early">
+<script src="/sensor.js"></script>
+<input name="late">
+</body></html>"#;
+
+        let page = Page::read("https://example.com/", html).running("https://example.com/sensor.js");
+
+        assert_eq!(page.fields.len(), 2);
+        assert_eq!(page.fields_at_current_script(), 1);
     }
 
     #[test]

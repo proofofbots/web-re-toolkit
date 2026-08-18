@@ -51,21 +51,29 @@ The other ops: `discover` reports the surface without running anything, `page` h
 | `page_url` | none | page the session warms against when an op does not name one |
 | `profile` | first in the library | sandbox profile id from `wre sandbox list` |
 | `random_profile` | `false` | pick a captured profile at random instead |
+| `random_machine` | `true` | put every session on a different Mac: chip, cores and memory, picked together |
 | `fingerprint` | from the user agent | transport fingerprint as `profile[:platform]` |
 | `user_agent` | the profile's | overrides what the sandbox and the transport both claim |
-| `wait_ms` | `4000` | how long the sensor runs after load |
-| `paced` | `true` | spend that wait in real time, so the payload's clock matches the edge's |
 | `behaviour` | `true` | play a pointer, click and key stream into the page |
+| `typed` | a word off the seed | what the visitor types into the page's first text field |
 | `pixel` | `true` | run the pixel client when the page serves one |
-| `live_xhr` | `false` | let the sensor's own requests leave the sandbox |
-| `rounds` | `2` | payloads posted per solve |
+| `live_xhr` | `true` | let the sensor's own requests leave the sandbox |
+| `wire_pace` | `false` | hold each request until the wall clock reaches the sandbox's |
+| `warp` | `16` | how much faster the page's clock runs than the wall while a wait is running |
+| `load_posts_ms` | `4000` | ceiling on waiting for the script's own load posts to be answered |
+| `wait_ms` | `6000` | ceiling on the wait after the input stream, which ends when the edge validates the jar |
+| `rounds` | `2` | payloads the host posts per solve, when `live_xhr` is off |
 | `init_cost_ms` | `25` | clock charge applied when the script writes `bmak.startTs` |
 
-`live_xhr` is the one worth understanding. With it off, the sandbox answers the script's own `XMLHttpRequest` with `201 {"success":true}` and the host posts the payload the script built, once per round, with the headers a browser sends. With it on, every repost the script schedules goes out for real, which on a twenty second dwell is five or six posts in a couple of seconds of wall time. Measured against Xero's login endpoint on 2026-08-16, that is the difference between being served and being refused: same payload, same profile, same transport.
+The two waits are ceilings on a condition, not durations: the first ends when the script's own load posts have been answered, the second when the edge has validated the jar. A session the edge believes early pays neither, which is most of why a solve takes about a second and a half.
+
+`live_xhr` is the one worth understanding. With it on, which is the default, every request the script makes goes out for real, the way it does in a browser. With it off the sandbox answers the script's own `XMLHttpRequest` with `201 {"success":true}` and the host posts the payload the script built instead, once per round. The edge reads those two differently: measured against Xero's login endpoint, and again against the Lee County search, the same payload from the same profile over the same transport is served one way and refused the other.
 
 ## The device profile
 
-The sandbox profile is where the payload's device fields come from, so a captured profile beats the built-in one. `wre sandbox capture --open` drives a real Chrome and stores what it reads; the client picks the first profile in `profiles/` unless told otherwise, and falls back to the built-in when the library is empty.
+The sandbox profile is where the payload's device fields come from. The built-in one is a whole captured Chrome on macOS, so a fresh install is served, but it carries no page layout and a capture of your own is still better. `wre sandbox capture` serves a page you open in the browser you want to replay, `--open` drives a real Chrome instead; the client picks the first profile in `profiles/` unless told otherwise, and falls back to the built-in when the library is empty.
+
+What a machine renders is left exactly as captured, because two Macs running the same macOS with the same fonts draw the same canvas: text rasterises on the CPU. A canvas hash that moves per session belongs to no machine at all, and the edge notices. What does differ between Macs is the chip, its core count and its memory, so `random_machine` puts each session on one of sixteen real combinations from M1 to M4 Pro and rewrites the renderer string, `hardwareConcurrency` and `deviceMemory` together. `run.machine` reports what a session picked.
 
 Keep the transport and the profile in step. The client sends the profile's user agent and lets `wre-net` pick the closest emulation profile for it. If the captured Chrome is newer than any profile `wreq` carries, the handshake lands on the newest one it has while the header says what the device said.
 

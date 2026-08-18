@@ -4,14 +4,12 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wreq::IntoEmulation;
-use wreq::header::USER_AGENT;
+use wreq::header::{HeaderName, HeaderValue, USER_AGENT};
 
 use wre_core::error::{Error, Result};
 
 pub use wreq_util::{Platform, Profile};
 
-/// Transport identity for an HTTP client: the TLS handshake, HTTP/2 settings and
-/// default headers of one browser build on one platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fingerprint {
     pub profile: Profile,
@@ -42,8 +40,6 @@ impl Fingerprint {
         Self { profile, platform, ..Self::default() }
     }
 
-    /// Picks the profile and platform closest to what `agent` claims, so the TLS and
-    /// HTTP/2 layers tell the same story as the `User-Agent` header.
     pub fn from_user_agent(agent: &str) -> Option<Self> {
         let platform = platform_of(agent);
         let family = family_of(agent, platform)?;
@@ -63,7 +59,6 @@ impl Fingerprint {
         Some(Self { profile, platform, ..Self::default() })
     }
 
-    /// The `User-Agent` this fingerprint sends by default.
     pub fn user_agent(&self) -> Option<String> {
         let emulation = wreq_util::Emulation::builder()
             .profile(self.profile)
@@ -113,6 +108,55 @@ impl IntoEmulation for Fingerprint {
             .headers(self.headers)
             .build()
             .into_emulation()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Claim {
+    pub user_agent: String,
+    pub brands: String,
+    pub mobile: bool,
+    pub platform: String,
+}
+
+impl Claim {
+    pub fn hints(&self) -> Vec<(String, String)> {
+        vec![
+            ("sec-ch-ua".to_string(), self.brands.clone()),
+            (
+                "sec-ch-ua-mobile".to_string(),
+                if self.mobile { "?1" } else { "?0" }.to_string(),
+            ),
+            ("sec-ch-ua-platform".to_string(), format!("\"{}\"", self.platform)),
+        ]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Claimed {
+    pub fingerprint: Fingerprint,
+    pub claim: Claim,
+}
+
+impl IntoEmulation for Claimed {
+    fn into_emulation(self) -> wreq::Emulation {
+        let mut emulation = self.fingerprint.into_emulation();
+
+        let mut headers = vec![("user-agent".to_string(), self.claim.user_agent.clone())];
+        headers.extend(self.claim.hints());
+
+        for (name, value) in headers {
+            let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&value),
+            ) else {
+                continue;
+            };
+
+            emulation.headers.insert(name, value);
+        }
+
+        emulation
     }
 }
 

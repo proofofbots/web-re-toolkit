@@ -78,6 +78,7 @@ impl Event {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    pub step_px: f64,
     pub sample_ms: f64,
     pub jitter_px: f64,
     pub overshoot: f64,
@@ -89,6 +90,7 @@ pub struct Shape {
 impl Default for Shape {
     fn default() -> Self {
         Self {
+            step_px: 6.0,
             sample_ms: 8.0,
             jitter_px: 1.2,
             overshoot: 0.06,
@@ -177,7 +179,8 @@ impl Stream {
             return Ok(self);
         }
 
-        let steps = ((distance / 6.0).ceil() as usize).clamp(6, 220);
+        let step = if self.shape.step_px > 0.5 { self.shape.step_px } else { 6.0 };
+        let steps = ((distance / step).ceil() as usize).clamp(4, 220);
         let overshoot = self.shape.overshoot;
 
         let lift = Point::new(
