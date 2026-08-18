@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wre-runtime"
-version = "3.1.0"
+version = "3.1.1"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = []
